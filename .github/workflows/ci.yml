@@ -1,0 +1,158 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: configure, build, test, package
+        run: nix develop --command cmake --workflow --preset ci
+
+  sanitize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: configure, build, test under ASan/UBSan
+        run: nix develop --command cmake --workflow --preset san
+
+  tsan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: configure, build, test under TSan
+        run: nix develop --command cmake --workflow --preset tsan
+
+  coverage-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: configure, build, test with coverage
+        run: nix develop --command cmake --workflow --preset cov
+      - name: emit tracefile
+        run: >
+          nix develop --command gcovr --root . --object-directory build/cov
+          --filter 'ulid26/.*' --json -o coverage-linux.json
+      - name: upload tracefile
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-linux
+          path: coverage-linux.json
+
+  coverage-windows:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      # Debug: coverage wants full debug info and unsplit inline redundancies.
+      - name: configure (MSVC, Debug)
+        run: cmake -S . -B build/win-cov -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Debug
+      - name: build
+        run: cmake --build build/win-cov --config Debug
+      - name: install OpenCppCoverage
+        run: choco install opencppcoverage -y
+      # cover_children: ctest spawns the test binaries, and those are what
+      # execute the headers. Export Cobertura: gcovr ingests it at merge time.
+      - name: test under coverage
+        run: >
+          OpenCppCoverage --sources $env:GITHUB_WORKSPACE --cover_children
+          --export_type cobertura:coverage-win.xml --
+          ctest --test-dir build/win-cov -C Debug --output-on-failure
+      - name: upload tracefile
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-windows
+          path: coverage-win.xml
+
+  coverage-merge:
+    runs-on: ubuntu-latest
+    needs: [coverage-linux, coverage-windows]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: download tracefiles
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+      # gcovr merges by filename: strip backslashes, pin the source root,
+      # and cut the Windows workspace prefix down to the repo-relative
+      # ulid26/ path, so both tracefiles address the same files.
+      - name: normalize Windows paths
+        run: >
+          sed -i 's|\\|/|g; s|<source>[^<]*</source>|<source>.</source>|g;
+          s|filename="[^"]*ulid26/|filename="ulid26/|g' coverage-win.xml
+      # The gate lives here, on the combined report: platform-specific code
+      # (the MSVC CAS tier, GCC attributes) contributes hits from the side
+      # that executes it, and the per-side rows in the HTML show exactly
+      # which side covers what. Branch ratio stays informational
+      # (GCC counts noexcept-unreachable unwind arcs). gcov misattributes
+      # arcs on the reservation ternary (GCC bug 68080: negative hits), so
+      # that parse error class is downgraded to a warning.
+      - name: merge, gate, report
+        run: >
+          nix develop --command gcovr --json-add-tracefile coverage-linux.json
+          --cobertura-add-tracefile coverage-win.xml --root .
+          --filter 'ulid26/.*' --print-summary --fail-under-line 90
+          --gcov-ignore-parse-errors negative_hits.warn_once_per_file
+          --html-details coverage-html
+      - name: upload HTML report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: coverage-html
+
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: configure, build fuzz harness
+        run: nix develop --command cmake --workflow --preset fuzz
+      # Deterministic seed-corpus gate: fixed seed, bounded run count and
+      # per-unit timeout. Nonzero exit on any crash, leak, timeout or OOM.
+      - name: run seed corpus
+        run: nix develop --command ./build/fuzz/fuzz/fuzz_text fuzz/corpus -runs=1000000 -seed=42 -timeout=30
+
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      # Explicit configure: the presets pin Ninja, so MSVC uses -S/-B/-G.
+      - name: configure (MSVC, Release)
+        run: cmake -S . -B build/win -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+      - name: build
+        run: cmake --build build/win --config Release
+      - name: test
+        run: ctest --test-dir build/win -C Release --output-on-failure
+
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: clang-format check
+        run: >
+          nix develop --command clang-format --dry-run --Werror
+          ulid26/ulid26.hpp ulid26/value.hpp ulid26/generators.hpp ulid26/batch.hpp ulid26/ranges.hpp
+          test/test_constexpr.cpp test/test_ulid.cpp test/test_generate.cpp
+          test/test_batch.cpp test/test_ranges.cpp
+          bench/bench_batch.cpp bench/bench_reference.cpp bench/bench_ranges.cpp
+          fuzz/fuzz_text.cpp

@@ -1,0 +1,67 @@
+#                                                        
+#       ░▓▓▓▒  ░█████           █                    █   
+#        ▒▒▒█▒ █▓   █           █                    █   
+#            █ █    █         █████   ███   ▒███▒  █████ 
+#            █▒█▒   █           █    ▓▓ ▒█  █▒ ░█    █   
+#       ░█████▒░█████           █    █   █  █▒░      █   
+#        ░░░░█▒ █▒  █   ███     █    █████  ░███▒    █   
+#            █░ █   █           █    █         ▒█    █   
+#           ▓█ ▒▓   █           █░   ▓▓  █  █░ ▒█    █░  
+#       ░████  █░   █           ▒██   ███▒  ▒███▒    ▒██ 
+#                                                        
+Checks: "*,
+  -abseil-*,
+  -altera-*,
+  -android-*,
+  -boost-*,
+  -darwin-*,
+  -fuchsia-*,
+  -google-*,
+  -linuxkernel-*,
+  -llvm*,
+  -mpi-*,
+  -objc-*,
+  -openmp-*,
+  -zircon-*,
+  -*-avoid-do-while,
+  -*-trailing-return-type"
+
+CheckOptions:
+  misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic: true
+  # More typing, discouraging usage of private members.
+  readability-identifier-naming.PrivateMemberCase: lower_case
+  readability-identifier-naming.PrivateMemberSuffix: _
+  readability-identifier-naming.PrivateMethodCase: lower_case
+  readability-identifier-naming.ProtectedMemberCase: lower_case
+  readability-identifier-naming.ProtectedMemberSuffix: _
+  readability-identifier-naming.ProtectedMethodCase: lower_case
+  readability-identifier-naming.PublicMemberCase: lower_case
+  readability-identifier-naming.PublicMethodCase: lower_case
+  readability-identifier-naming.FunctionCase: lower_case
+  readability-identifier-naming.VariableCase: lower_case
+  readability-identifier-naming.NamespaceCase: lower_case
+
+  readability-identifier-naming.EnumCase: lower_case
+  # This library's public API is std-styled by design (ulid, errc,
+  # monotonic_local, ...), so classes/structs/enums are lower_case here.
+  # Regular constants keep the house style below.
+  readability-identifier-naming.ClassCase: lower_case
+  readability-identifier-naming.StructCase: lower_case
+  # std::errc-mirror enumerators (invalid_length, ...) stay lower_case,
+  # matching the std::errc idiom instead of the k-prefixed house style.
+  readability-identifier-naming.EnumConstantCase: lower_case
+  readability-identifier-naming.EnumConstantPrefix: ""
+  readability-identifier-naming.TemplateParamterCase: CamelCase
+  readability-identifier-naming.ConstantCase: CamelCase
+  # I want most constants prefixed with 'k'
+  readability-identifier-naming.ConstantPrefix: k
+  # Except for locals, as they look like variables in the end.
+  readability-identifier-naming.LocalConstantPrefix: ""
+
+  # Short conventional names are acceptable (those are regexes, not lists)
+  readability-identifier-length.IgnoredExceptionVariableNames: ^(err|e|x|ex)$
+  readability-identifier-length.IgnoredVariableNames: ^(err|fd|h|hi|hr|id|lo|ok|res|cb)$
+  readability-identifier-length.IgnoredParameterNames: ^(err|fd|h|hi|hr|id|lo|ok|res|cb)$
+
+# Regex for which headers clang-tidy should emit warnings. It always emits warnings from .cpp files.
+HeaderFilterRegex: ".*hpp$"

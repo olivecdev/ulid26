@@ -1,0 +1,222 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 26,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "ULID26_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "dev",
+      "displayName": "Developer iteration",
+      "description": "Debug + Ninja for quick rebuilds. Requires ninja (provided by nix develop). Strict warnings come from the ULID26_warnings target, per toolchain.",
+      "inherits": "base",
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "ci",
+      "displayName": "Continuous integration",
+      "description": "Release with warnings as errors, then test and package. Mirrors the production build.",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "san",
+      "displayName": "Sanitizers",
+      "description": "Debug + ASan/UBSan for the test suite (GCC/Clang only). Strict warnings come from the ULID26_warnings target.",
+      "inherits": "base",
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
+    },
+    {
+      "name": "fuzz",
+      "displayName": "Fuzz harness",
+      "description": "Clang + libFuzzer build of the text-codec harness (compiler pinned, no env setup needed); tests and benchmarks stay off.",
+      "inherits": "base",
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "ULID26_BUILD_TESTS": "OFF",
+        "ULID26_BUILD_BENCHMARKS": "OFF",
+        "ULID26_BUILD_FUZZ": "ON"
+      }
+    },
+    {
+      "name": "tsan",
+      "displayName": "ThreadSanitizer",
+      "description": "Debug + TSan for the test suite (GCC/Clang only). Both tiers run; only the mutex tier validates the commit protocol — TSan cannot see the inline-asm CAS tier, so that run checks the harness and atomics only.",
+      "inherits": "base",
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread"
+      }
+    },
+    {
+      "name": "cov",
+      "displayName": "Coverage",
+      "description": "Debug + gcov coverage for the test suite (GCC only). Benchmarks and fuzz stay off: only ctest binaries feed the report.",
+      "inherits": "base",
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "--coverage",
+        "CMAKE_EXE_LINKER_FLAGS": "--coverage",
+        "ULID26_BUILD_BENCHMARKS": "OFF",
+        "ULID26_BUILD_FUZZ": "OFF"
+      }
+    },
+    {
+      "name": "prod",
+      "displayName": "Production packaging",
+      "description": "Release build for packagers (nix, debhelper). No extra flags: packagers inject their own. Pass --prefix at install time.",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev-build",
+      "configurePreset": "dev"
+    },
+    {
+      "name": "ci-build",
+      "configurePreset": "ci"
+    },
+    {
+      "name": "san-build",
+      "configurePreset": "san"
+    },
+    {
+      "name": "tsan-build",
+      "configurePreset": "tsan"
+    },
+    {
+      "name": "cov-build",
+      "configurePreset": "cov"
+    },
+    {
+      "name": "fuzz-build",
+      "configurePreset": "fuzz"
+    },
+    {
+      "name": "prod-build",
+      "configurePreset": "prod"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "dev-test",
+      "configurePreset": "dev",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-test",
+      "configurePreset": "ci",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "san-test",
+      "configurePreset": "san",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "tsan-test",
+      "configurePreset": "tsan",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "cov-test",
+      "configurePreset": "cov",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ],
+  "packagePresets": [
+    {
+      "name": "ci-package",
+      "configurePreset": "ci",
+      "generators": ["TGZ"]
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "dev",
+      "steps": [
+        { "type": "configure", "name": "dev" },
+        { "type": "build", "name": "dev-build" },
+        { "type": "test", "name": "dev-test" }
+      ]
+    },
+    {
+      "name": "ci",
+      "steps": [
+        { "type": "configure", "name": "ci" },
+        { "type": "build", "name": "ci-build" },
+        { "type": "test", "name": "ci-test" },
+        { "type": "package", "name": "ci-package" }
+      ]
+    },
+    {
+      "name": "san",
+      "steps": [
+        { "type": "configure", "name": "san" },
+        { "type": "build", "name": "san-build" },
+        { "type": "test", "name": "san-test" }
+      ]
+    },
+    {
+      "name": "fuzz",
+      "steps": [
+        { "type": "configure", "name": "fuzz" },
+        { "type": "build", "name": "fuzz-build" }
+      ]
+    },
+    {
+      "name": "tsan",
+      "steps": [
+        { "type": "configure", "name": "tsan" },
+        { "type": "build", "name": "tsan-build" },
+        { "type": "test", "name": "tsan-test" }
+      ]
+    },
+    {
+      "name": "cov",
+      "steps": [
+        { "type": "configure", "name": "cov" },
+        { "type": "build", "name": "cov-build" },
+        { "type": "test", "name": "cov-test" }
+      ]
+    }
+  ]
+}

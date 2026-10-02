@@ -1,0 +1,57 @@
+#                                                        
+#       ░▓▓▓▒  ░█████           █                    █   
+#        ▒▒▒█▒ █▓   █           █                    █   
+#            █ █    █         █████   ███   ▒███▒  █████ 
+#            █▒█▒   █           █    ▓▓ ▒█  █▒ ░█    █   
+#       ░█████▒░█████           █    █   █  █▒░      █   
+#        ░░░░█▒ █▒  █   ███     █    █████  ░███▒    █   
+#            █░ █   █           █    █         ▒█    █   
+#           ▓█ ▒▓   █           █░   ▓▓  █  █░ ▒█    █░  
+#       ░████  █░   █           ▒██   ███▒  ▒███▒    ▒██ 
+#                                                        
+BasedOnStyle: LLVM
+AlignArrayOfStructures: Right
+AlignAfterOpenBracket: BlockIndent
+AlignConsecutiveAssignments:
+  Enabled: true
+  AcrossComments: true
+  AlignCompound: true
+AlignConsecutiveDeclarations:
+  Enabled: true
+  AcrossComments: true
+  AlignCompound: true
+  PadOperators: true
+AlignConsecutiveMacros:
+  Enabled: true
+AllowShortBlocksOnASingleLine: Always
+AllowShortFunctionsOnASingleLine: All
+AlwaysBreakTemplateDeclarations: true
+BreakTemplateDeclarations: Yes # Requires clang-format-19
+BreakAfterAttributes: Always
+BreakBeforeTernaryOperators: false
+BreakConstructorInitializers: AfterColon
+BreakInheritanceList: AfterColon
+# Over this limit it becomes to hard to read on GH mobile.
+ColumnLimit: 100
+EmptyLineBeforeAccessModifier: Always
+FixNamespaceComments: true
+IncludeBlocks: Regroup
+IndentWidth: 4
+InsertNewlineAtEOF: true
+MainIncludeChar: AngleBracket
+NamespaceIndentation: All
+PointerAlignment: Left
+QualifierAlignment: Custom
+QualifierOrder:
+  [
+    "friend",
+    "static",
+    "constexpr",
+    "inline",
+    "type",
+    "const",
+    "volatile",
+    "restrict",
+  ]
+SeparateDefinitionBlocks: Always
+SortIncludes: CaseSensitive
