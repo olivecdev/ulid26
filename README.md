@@ -494,5 +494,7 @@ characters long, so the name stuck, even though it only requires C++23.
 
 ## License
 
-MIT — see [LICENSE](LICENSE); same terms as the reference implementations this library derives from:
-([suyash/ulid](https://github.com/suyash/ulid), [ulid/javascript](https://github.com/ulid/javascript)).
+MIT — see [LICENSE](LICENSE); same terms as the reference implementations this library respectfully
+derives and deviates from:
+  * [suyash/ulid](https://github.com/suyash/ulid)
+  * [ulid/javascript](https://github.com/ulid/javascript)

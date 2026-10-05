@@ -17,7 +17,7 @@
     {
       "name": "dev",
       "displayName": "Developer iteration",
-      "description": "Debug + Ninja for quick rebuilds. Requires ninja (provided by nix develop). Strict warnings come from the ULID26_warnings target, per toolchain.",
+      "description": "Debug + Ninja for quick rebuilds.",
       "inherits": "base",
       "generator": "Ninja",
       "cacheVariables": {
@@ -36,7 +36,7 @@
     {
       "name": "san",
       "displayName": "Sanitizers",
-      "description": "Debug + ASan/UBSan for the test suite (GCC/Clang only). Strict warnings come from the ULID26_warnings target.",
+      "description": "Debug + ASan/UBSan for the test suite (GCC/Clang only).",
       "inherits": "base",
       "generator": "Ninja",
       "cacheVariables": {
