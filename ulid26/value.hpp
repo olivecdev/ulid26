@@ -256,31 +256,69 @@ namespace ulid26 {
     constexpr std::expected<ulid, errc> ulid::try_parse_narrow(std::string_view text) noexcept {
         using namespace detail;
 
-        struct decoder {
-            std::uint64_t high, low;
-            bool          bad_bit;
-        };
-
-        // Overflow can only be declared if the rest of the string is valid, so the first
-        // character cannot be checked first.
-        auto const result = std::accumulate(
-            text.begin(), text.end(), decoder{}, [](decoder state, char elem) -> decoder {
-                auto const value          = kDecode[static_cast<std::uint8_t>(elem)];
-                state.bad_bit             = state.bad_bit || value == kInvalidChar;
-                std::uint64_t const carry = state.low >> (64 - kBitsPerChar);
-                state.low                 = (state.low << kBitsPerChar) | value;
-                state.high                = (state.high << kBitsPerChar) | carry;
-                return state;
+        std::string_view tstamp    = text.substr(0, kTimestampChars);
+        std::uint64_t    timestamp = 0;
+        for (char const elem : tstamp) {
+            std::uint64_t const value = kDecode[static_cast<std::uint8_t>(elem)];
+            if (value == kInvalidChar) {
+                return std::unexpected(errc::invalid_character);
             }
-        );
+            timestamp = (timestamp << kBitsPerChar) | value;
+        }
 
-        if (result.bad_bit) {
+        std::string_view entropy_h    = text.substr(kTimestampChars, kEntropyHiGroups);
+        std::uint64_t    entropy_high = 0;
+        for (char const elem : entropy_h) {
+            std::uint64_t const value = kDecode[static_cast<std::uint8_t>(elem)];
+            if (value == kInvalidChar) {
+                return std::unexpected(errc::invalid_character);
+            }
+            entropy_high = (entropy_high << kBitsPerChar) | value;
+        }
+
+        std::uint64_t const straddle_value =
+            kDecode[static_cast<std::uint8_t>(text[kEntropySplitIndex])];
+        if (straddle_value == kInvalidChar) {
             return std::unexpected(errc::invalid_character);
         }
+        entropy_high = (entropy_high << 1U) | (straddle_value >> kStraddleShift);
+
+        std::string_view entropy_l   = text.substr(kEntropySplitIndex + 1);
+        std::uint64_t    entropy_low = straddle_value & kLowNibble;
+        for (char const elem : entropy_l) {
+            std::uint64_t const value = kDecode[static_cast<std::uint8_t>(elem)];
+            if (value == kInvalidChar) {
+                return std::unexpected(errc::invalid_character);
+            }
+            entropy_low = (entropy_low << kBitsPerChar) | value;
+        }
+
+        // struct decoder {
+        //     std::uint64_t high, low;
+        //     bool          bad_bit;
+        // };
+        //
+        // // Overflow can only be declared if the rest of the string is valid, so the first
+        // // character cannot be checked first.
+        // auto const result = std::accumulate(
+        //     text.begin(), text.end(), decoder{}, [](decoder state, char elem) -> decoder {
+        //         auto const value          = kDecode[static_cast<std::uint8_t>(elem)];
+        //         state.bad_bit             = state.bad_bit || value == kInvalidChar;
+        //         std::uint64_t const carry = state.low >> (64 - kBitsPerChar);
+        //         state.low                 = (state.low << kBitsPerChar) | value;
+        //         state.high                = (state.high << kBitsPerChar) | carry;
+        //         return state;
+        //     }
+        // );
+        //
+        // if (result.bad_bit) {
+        //     return std::unexpected(errc::invalid_character);
+        // }
         if (kDecode[static_cast<std::uint8_t>(text[0])] > kMaxFirstCharValue) {
             return std::unexpected(errc::overflow);
         }
-        return ulid{result.high, result.low};
+        std::uint64_t const high = (timestamp << kTimestampShift) | entropy_high;
+        return ulid{high, entropy_low};
     }
 
     template <std_char CharT>
