@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Carlos Nihelton <cn@olivec.dev>
 // SPDX-License-Identifier: MIT
 //
-// Unit tests for ulid26::is_valid and ulid26::try_parse (ulid26/value.hpp)
-// with boost-ext/ut. Every vector below mirrors the coverage of the
-// reference worktree's suites: known vectors, every character width,
-// malformed positions, the first-character cap, length mismatches and
-// parse/is_valid agreement, plus the constexpr proofs as static_asserts.
+// Unit tests for ulid26::is_valid, ulid26::try_parse and ulid26::ulid::to_chars
+// (ulid26/value.hpp) with boost-ext/ut. Every vector below mirrors the
+// coverage of the reference worktree's suites: known vectors, every
+// character width, malformed positions, the first-character cap, length
+// mismatches and parse/is_valid agreement, plus the constexpr proofs as
+// static_asserts. The encode side adds spelling vectors, the lowercase
+// normalization and round-trip proofs: decode inverts encode.
 //
 // The corpus is literal by nature, so magic-number warnings are suspended
 // file-wide. ut itself is a third-party header: it arrives via SYSTEM
@@ -18,6 +20,8 @@
 #include <boost/ut.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <span>
+#include <string>
 #include <string_view>
 #include <ulid26/value.hpp>
 
@@ -114,6 +118,40 @@ namespace {
     static_assert(
         ulid26::try_parse(std::u32string_view{U"short"}).error() == ulid26::errc::invalid_length
     );
+
+    // Constexpr spelling of an id into a fixed array (proof-side staging:
+    // to_chars writes caller storage, so the proof owns the buffer).
+    constexpr std::array<char, ulid26::ulid::kTextSize> spell(ulid26::ulid id) {
+        std::array<char, ulid26::ulid::kTextSize> out{};
+        id.to_chars(std::span<char, ulid26::ulid::kTextSize>{out});
+        return out;
+    }
+
+    constexpr bool spells(ulid26::ulid id, std::string_view text) {
+        auto const             out  = spell(id);
+        std::string_view const view{out.data(), out.size()};
+        return view == text;
+    }
+
+    // Boundaries and the spec example spell exactly.
+    static_assert(spells(ulid26::ulid::min(), kNil));
+    static_assert(spells(ulid26::ulid::max(), kMax));
+    static_assert(spells(*ulid26::try_parse(kExample), kExample));
+    // Encoding normalizes: lowercase parses, uppercase spells.
+    static_assert(spells(*ulid26::try_parse("01arz3ndektsv4rrffq69g5fav"), kExample));
+    // Maximum timestamp with nil entropy: the two fields spell independently.
+    static_assert(spells(*ulid26::try_parse("7ZZZZZZZZZ0000000000000000"), "7ZZZZZZZZZ0000000000000000"));
+
+    // Decode inverts encode, and every spelling validates.
+    constexpr bool round_trips(ulid26::ulid id) {
+        auto const             text = spell(id);
+        std::string_view const view{text.data(), text.size()};
+        return ulid26::is_valid(view) && *ulid26::try_parse(view) == id;
+    }
+
+    static_assert(round_trips(ulid26::ulid::min()));
+    static_assert(round_trips(ulid26::ulid::max()));
+    static_assert(round_trips(*ulid26::try_parse(kExample)));
 
     // Copies a string_view into a fixed array (test-side staging only).
     template <std::size_t N>
@@ -362,6 +400,81 @@ int main() {
             agreed = agreed && (ulid26::is_valid(view) == parsed.has_value());
         }
         expect(agreed) << "is_valid agrees with try_parse on 2048 soups";
+    };
+
+    "to_chars vectors"_test = [] {
+        std::array<char, 26> out{};
+        ulid26::ulid::min().to_chars(std::span<char, 26>{out});
+        expect(std::string_view{out.data(), out.size()} == kNil) << "nil spells zeros";
+        ulid26::ulid::max().to_chars(std::span<char, 26>{out});
+        expect(std::string_view{out.data(), out.size()} == kMax) << "max spells cap";
+        auto const example = ulid26::try_parse(kExample);
+        expect(example.has_value()) << "example parses";
+        if (example.has_value()) {
+            example.value().to_chars(std::span<char, 26>{out});
+            expect(std::string_view{out.data(), out.size()} == kExample) << "example round-spells";
+            expect(example.value().to_string() == std::string{kExample})
+                << "to_string owns the spelling";
+        }
+        // Encoding normalizes: lowercase in, uppercase out.
+        auto const lowered = ulid26::try_parse("01arz3ndektsv4rrffq69g5fav");
+        expect(lowered.has_value()) << "lowercase parses";
+        if (lowered.has_value()) {
+            lowered.value().to_chars(std::span<char, 26>{out});
+            expect(std::string_view{out.data(), out.size()} == kExample)
+                << "encode normalizes to uppercase";
+        }
+    };
+
+    "to_chars widths"_test = [] {
+        auto const example = ulid26::try_parse(kExample);
+        expect(example.has_value()) << "example parses";
+        if (!example.has_value()) {
+            return;
+        }
+        bool same = true;
+        std::array<char16_t, 26> wide16{};
+        example.value().to_chars(std::span<char16_t, 26>{wide16});
+        std::array<char32_t, 26> wide32{};
+        example.value().to_chars(std::span<char32_t, 26>{wide32});
+        std::array<wchar_t, 26> wide{};
+        example.value().to_chars(std::span<wchar_t, 26>{wide});
+        std::array<char8_t, 26> narrow8{};
+        example.value().to_chars(std::span<char8_t, 26>{narrow8});
+        for (std::size_t index = 0; index < 26; ++index) {
+            auto const unit = static_cast<char32_t>(kExample[index]);
+            same = same && wide16.at(index) == static_cast<char16_t>(unit) &&
+                   wide32.at(index) == unit && wide.at(index) == static_cast<wchar_t>(unit) &&
+                   narrow8.at(index) == static_cast<char8_t>(unit);
+        }
+        expect(same) << "every width spells the same code units";
+    };
+
+    "to_chars round-trip"_test = [] {
+        // Canonical soup: uppercase alphabet only, so every valid soup is
+        // already in canonical spelling and must survive the round trip
+        // byte-exact. The first-character cap rejects most soups; the
+        // survivors still cover interior, straddle and boundary bits.
+        constexpr std::string_view kAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+        constexpr std::size_t      kCases    = 2048;
+        deterministic_rng          rng{0x0123456789ABCDEFULL};
+        bool                       held  = true;
+        std::size_t                valid = 0;
+        for (std::size_t trial = 0; trial < kCases && held; ++trial) {
+            std::array<char, 26> soup{};
+            for (char& slot : soup) {
+                slot = kAlphabet.at(static_cast<std::size_t>(rng.next_byte()) & 31U);
+            }
+            std::string_view const view{soup.data(), soup.size()};
+            auto const             parsed = ulid26::try_parse(view);
+            if (parsed.has_value()) {
+                ++valid;
+                auto const text = spell(parsed.value());
+                held = held && std::string_view{text.data(), text.size()} == view;
+            }
+        }
+        expect(valid > 0) << "soup covered valid ids";
+        expect(held) << "decode inverts encode on canonical soup";
     };
 }
 

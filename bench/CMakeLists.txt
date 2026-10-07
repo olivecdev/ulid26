@@ -14,8 +14,29 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(googlebenchmark)
 
+# Reference implementation for head-to-head benchmarks (bench-only
+# dependency, never linked into the library itself). Excluded on MSVC:
+# without __int128 suyash falls back to its struct-based header, whose
+# integer-oriented API this benchmark is not written against.
+if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    FetchContent_Declare(
+        suyash_ulid
+        GIT_REPOSITORY https://github.com/suyash/ulid
+        GIT_TAG        3a46362db2c0f5fece10e59a52bdefbf7eec0877
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(suyash_ulid)
+endif()
+
 # No ulid26_warnings here by convention (see test/CMakeLists.txt): the
 # strict set applies to the test binaries, benchmarks stay warning-clean
 # by construction instead.
 add_executable(bench_is_valid bench_is_valid.cpp)
 target_link_libraries(bench_is_valid PRIVATE ulid26 benchmark::benchmark)
+
+add_executable(bench_to_chars bench_to_chars.cpp)
+target_link_libraries(bench_to_chars PRIVATE ulid26 benchmark::benchmark)
+if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    target_include_directories(bench_to_chars PRIVATE ${suyash_ulid_SOURCE_DIR}/src)
+    target_compile_definitions(bench_to_chars PRIVATE ULID26_HAVE_SUYASH)
+endif()
