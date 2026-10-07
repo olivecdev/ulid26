@@ -20,7 +20,10 @@
 #include <array>
 #include <cstdint>
 #include <expected>
+#include <memory>
 #include <numeric>
+#include <span>
+#include <string>
 #include <system_error>
 
 namespace ulid26 {
@@ -34,6 +37,9 @@ namespace ulid26 {
         time_reversed,      // monotonic generator: the clock stepped backwards
         generation_overflow // monotonic generator: entropy exhausted in one ms
     };
+
+    template <typename CharT>
+    concept std_char = requires { typename std::char_traits<CharT>::char_type; };
 
     // A Universally Unique Lexicographically Sortable Identifier (ULID): a 48-bit millisecond
     // timestamp followed by 80 bits of entropy. Pure value type — closed to user manipulation,
@@ -62,10 +68,20 @@ namespace ulid26 {
         // The member order (hi, then lo) makes the defaulted comparison exactly the spec's
         // left-to-right byte order.
         friend constexpr std::strong_ordering operator<=>(ulid left, ulid right) = default;
+        // Non-allocating write of the canonical 26 characters into caller storage, in any character
+        // type. This is the zero-allocation path: the client sizes the string (or array, or
+        // CharT[26]), the library only fills it. See to_string for the owning form.
+        template <std_char CharT = char>
+        constexpr void to_chars(std::span<CharT, kTextSize> out) const noexcept;
+        // Owning string form in any character type and allocator: exactly one allocation via
+        // resize_and_overwrite, no default-fill, no intermediate copy. Hot paths that cannot
+        // allocate use to_chars into caller storage.
+        template <std_char CharT = char, typename AllocT = std::allocator<CharT>>
+        [[nodiscard]]
+        std::basic_string<CharT, std::char_traits<CharT>, AllocT>
+        to_string(AllocT const& alloc = AllocT{}) const;
     };
 
-    template <typename CharT>
-    concept std_char = requires { typename std::char_traits<CharT>::char_type; };
     // Returns true if the text is a valid ULID string, false otherwise.
     template <std_char CharT>
     [[nodiscard]]
@@ -320,6 +336,43 @@ namespace ulid26 {
 
     constexpr std::uint64_t ulid::timestamp() const noexcept {
         return hi_ >> detail::kTimestampShift;
+    }
+
+    template <std_char CharT>
+    constexpr void ulid::to_chars(std::span<CharT, ulid::kTextSize> out) const noexcept {
+        auto slot   = out.begin();
+        // NOLINTNEXTLINE(bugprone-easily-swappable-parameters): local private helper.
+        auto encode = [&slot](std::uint64_t value, std::size_t shift, std::size_t boundary) {
+            for (std::size_t i = 0; i < boundary; ++i) {
+                auto const index  = static_cast<std::uint8_t>((value >> shift) & detail::kCharMask);
+                *slot++           = static_cast<CharT>(detail::kCrockfordAlphabet[index]);
+                shift            -= detail::kBitsPerChar;
+            }
+        };
+
+        encode(timestamp(), detail::kFirstTimestampShift, detail::kTimestampChars);
+
+        std::uint64_t const entropy_hi = hi_ & detail::kEntropyHighMask;
+        encode(entropy_hi, detail::kEntropyHiTop, detail::kEntropyHiGroups);
+
+        auto const straddle = static_cast<std::uint32_t>(
+            ((entropy_hi & 1U) << detail::kStraddleShift) |
+            ((low_ >> detail::kLoTopShift) & detail::kLowNibble)
+        );
+        *slot++ = static_cast<CharT>(detail::kCrockfordAlphabet[straddle]);
+
+        encode(low_, detail::kLoGroupBase, detail::kEntropyLoGroups);
+    }
+
+    template <std_char CharT, typename AllocT>
+    std::basic_string<CharT, std::char_traits<CharT>, AllocT>
+    ulid::to_string(AllocT const& alloc) const {
+        std::basic_string<CharT, std::char_traits<CharT>, AllocT> text(alloc);
+        text.resize_and_overwrite(kTextSize, [this](CharT* buffer, std::size_t) {
+            to_chars(std::span<CharT, kTextSize>{buffer, kTextSize});
+            return kTextSize;
+        });
+        return text;
     }
 } // namespace ulid26
 
