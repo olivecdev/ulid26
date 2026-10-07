@@ -131,7 +131,7 @@ namespace ulid26 {
         constexpr inline std::size_t   kLowNibble             = 0x0F;
         constexpr inline std::size_t   kByteMask              = 0xFF;
         constexpr inline std::size_t   kTopByteShift          = 56;
-        constexpr inline std::uint8_t  kMaxFirstCharValue     = 7;
+        constexpr inline std::uint8_t  kMaxFirstCharValue     = '7';
         // Entropy chars 10..12 fill hi fully; char 13 straddles the hi/lo halves.
         constexpr inline std::size_t   kEntropyHiGroups       = 3;
         constexpr inline std::size_t   kEntropySplitIndex     = 13;
@@ -216,7 +216,8 @@ namespace ulid26 {
         [[nodiscard]]
         // Lenght assumed correct, as it's called post length check in is_valid().
         constexpr bool is_valid_narrowed(std::string_view text) noexcept {
-            if (kDecode[static_cast<std::uint8_t>(text[0])] > kMaxFirstCharValue) {
+            // The first character must be 0..7 to avoid overflow.
+            if (text[0] > kMaxFirstCharValue) {
                 return false;
             }
             return !std::any_of(text.begin(), text.end(), [](char elem) {
@@ -314,7 +315,7 @@ namespace ulid26 {
         // if (result.bad_bit) {
         //     return std::unexpected(errc::invalid_character);
         // }
-        if (kDecode[static_cast<std::uint8_t>(text[0])] > kMaxFirstCharValue) {
+        if (text[0] > kMaxFirstCharValue) {
             return std::unexpected(errc::overflow);
         }
         std::uint64_t const high = (timestamp << kTimestampShift) | entropy_high;
