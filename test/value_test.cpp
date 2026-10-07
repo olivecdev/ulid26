@@ -230,18 +230,18 @@ int main() {
         bool const parsed  = example.has_value() && max.has_value() && nil.has_value();
         expect(parsed) << "vectors parse";
         if (parsed) {
-            expect(example->timestamp() == kExampleTimestamp) << "example timestamp";
-            expect(max->timestamp() == kMaxTimestamp) << "max timestamp";
-            expect(*max == ulid26::ulid::max()) << "max parses to ulid::max";
-            expect(nil->timestamp() == 0) << "nil timestamp";
-            expect(*nil == ulid26::ulid::min()) << "nil parses to ulid::min";
-            expect(*nil < *example) << "nil sorts first";
-            expect(*example < *max) << "example sorts before max";
+            expect(example.value().timestamp() == kExampleTimestamp) << "example timestamp";
+            expect(max.value().timestamp() == kMaxTimestamp) << "max timestamp";
+            expect(max.value() == ulid26::ulid::max()) << "max parses to ulid::max";
+            expect(nil.value().timestamp() == 0) << "nil timestamp";
+            expect(nil.value() == ulid26::ulid::min()) << "nil parses to ulid::min";
+            expect(nil.value() < example.value()) << "nil sorts first";
+            expect(example.value() < max.value()) << "example sorts before max";
             expect(ulid26::ulid::min() < ulid26::ulid::max()) << "min sorts before max";
         }
         auto const lowered = ulid26::try_parse("01arz3ndektsv4rrffq69g5fav");
         if (parsed && lowered.has_value()) {
-            expect(*lowered == *example) << "lowercase parses equal";
+            expect(lowered.value() == example.value()) << "lowercase parses equal";
         }
         expect(parsed && lowered.has_value()) << "lowercase parses";
     };
@@ -297,7 +297,7 @@ int main() {
             capped = capped && !result.has_value() && result.error() == ulid26::errc::overflow;
         }
         auto const max = ulid26::try_parse(kMax);
-        capped         = capped && max.has_value() && *max == ulid26::ulid::max();
+        capped         = capped && max.has_value() && max.value() == ulid26::ulid::max();
         expect(capped) << "first-char cap reports overflow";
     };
 
@@ -310,10 +310,10 @@ int main() {
                               from_u16.has_value() && from_u32.has_value();
         expect(accepted) << "wide texts parse";
         if (accepted) {
-            expect(from_wide->timestamp() == kExampleTimestamp) << "wchar_t timestamp";
-            expect(from_u8->timestamp() == kExampleTimestamp) << "char8_t timestamp";
-            expect(from_u16->timestamp() == kExampleTimestamp) << "char16_t timestamp";
-            expect(from_u32->timestamp() == kExampleTimestamp) << "char32_t timestamp";
+            expect(from_wide.value().timestamp() == kExampleTimestamp) << "wchar_t timestamp";
+            expect(from_u8.value().timestamp() == kExampleTimestamp) << "char8_t timestamp";
+            expect(from_u16.value().timestamp() == kExampleTimestamp) << "char16_t timestamp";
+            expect(from_u32.value().timestamp() == kExampleTimestamp) << "char32_t timestamp";
         }
         auto const short_wide = ulid26::try_parse(std::wstring_view{L"short"});
         expect(!short_wide.has_value() && short_wide.error() == ulid26::errc::invalid_length)
