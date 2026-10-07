@@ -255,48 +255,32 @@ namespace ulid26 {
     // Try parsing text as a ULID, assuming the length is correct.
     constexpr std::expected<ulid, errc> ulid::try_parse_narrow(std::string_view text) noexcept {
         using namespace detail;
+
+        struct decoder {
+            std::uint64_t high, low;
+            bool          bad_bit;
+        };
+
         // Overflow can only be declared if the rest of the string is valid, so the first
         // character cannot be checked first.
-        // We'll optimistically parse first and then check for invalid characters and overflow
-        // in one pass.
-        std::array<std::uint8_t, kTextSize> decoded{};
-        std::transform(text.begin(), text.end(), decoded.begin(), [](char elem) {
-            auto const value = kDecode[static_cast<std::uint8_t>(elem)];
-            return value;
-        });
-        // accumulate the first kTimestampChars characters into the timestamp without any checks:
-        std::uint64_t timestamp = 0;
-        timestamp               = std::accumulate(
-            decoded.begin(), decoded.begin() + kTimestampChars, timestamp,
-            [](std::uint64_t acc, std::uint8_t value) { return (acc << kBitsPerChar) | value; }
+        auto const result = std::accumulate(
+            text.begin(), text.end(), decoder{}, [](decoder state, char elem) -> decoder {
+                auto const value          = kDecode[static_cast<std::uint8_t>(elem)];
+                state.bad_bit             = state.bad_bit || value == kInvalidChar;
+                std::uint64_t const carry = state.low >> (64 - kBitsPerChar);
+                state.low                 = (state.low << kBitsPerChar) | value;
+                state.high                = (state.high << kBitsPerChar) | carry;
+                return state;
+            }
         );
-        std::uint64_t entropy_hi = 0;
-        entropy_hi               = std::accumulate(
-            decoded.begin() + kTimestampChars, decoded.begin() + kEntropySplitIndex, entropy_hi,
-            [](std::uint64_t acc, std::uint8_t value) { return (acc << kBitsPerChar) | value; }
-        );
-        auto const split_value = static_cast<std::uint64_t>(decoded[kEntropySplitIndex]);
-        // Entropy char 13 straddles the hi/lo halves, so we shift the hi half left by one and OR in
-        // the top bit of the straddle char.
-        entropy_hi             = (entropy_hi << 1U) | (split_value >> kStraddleShift);
 
-        std::uint64_t entropy_low = 0;
-        entropy_low               = std::accumulate(
-            decoded.begin() + kEntropySplitIndex, decoded.end(), entropy_low,
-            [](std::uint64_t acc, std::uint8_t value) { return (acc << kBitsPerChar) | value; }
-        );
-        // Check for invalid characters and overflow in one pass.
-        if (std::any_of(decoded.begin(), decoded.end(), [](std::uint8_t value) {
-                return value == kInvalidChar;
-            })) {
+        if (result.bad_bit) {
             return std::unexpected(errc::invalid_character);
         }
-        if (decoded[0] > kMaxFirstCharValue) {
+        if (kDecode[static_cast<std::uint8_t>(text[0])] > kMaxFirstCharValue) {
             return std::unexpected(errc::overflow);
         }
-        std::uint64_t high = (timestamp << kTimestampShift) | entropy_hi;
-        ulid          result{high, entropy_low};
-        return result;
+        return ulid{result.high, result.low};
     }
 
     template <std_char CharT>
