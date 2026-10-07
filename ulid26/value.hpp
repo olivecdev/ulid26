@@ -20,20 +20,10 @@
 #include <array>
 #include <cstdint>
 #include <expected>
+#include <numeric>
 #include <system_error>
 
 namespace ulid26 {
-    // A Universally Unique Lexicographically Sortable Identifier (ULID): a 48-bit millisecond
-    // timestamp followed by 80 bits of entropy. Pure value type — closed to user manipulation,
-    // trivially copyable, fully constexpr.
-    class ulid;
-    template <typename CharT>
-    concept std_char = requires { typename std::char_traits<CharT>::char_type; };
-    // Returns true if the text is a valid ULID string, false otherwise.
-    template <std_char CharT>
-    [[nodiscard]]
-    constexpr bool is_valid(std::basic_string_view<CharT> text) noexcept;
-
     // Error conditions for every fallible operation in this library.
     // Given a scoped enum can hold values outside of the defined enumerators, value-initializing
     // this errc results in a zero-value, which is intentionally not an error.
@@ -44,6 +34,46 @@ namespace ulid26 {
         time_reversed,      // monotonic generator: the clock stepped backwards
         generation_overflow // monotonic generator: entropy exhausted in one ms
     };
+
+    // A Universally Unique Lexicographically Sortable Identifier (ULID): a 48-bit millisecond
+    // timestamp followed by 80 bits of entropy. Pure value type — closed to user manipulation,
+    // trivially copyable, fully constexpr.
+    class ulid {
+        std::uint64_t hi_{0}, low_{0};
+
+        // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+        constexpr ulid(std::uint64_t high, std::uint64_t low) noexcept : hi_{high}, low_{low} {}
+
+        constexpr ulid() = default;
+
+      public:
+        static constexpr ulid max() noexcept { return ulid{~std::uint64_t{0}, ~std::uint64_t{0}}; }
+
+        static constexpr ulid min() noexcept { return ulid{}; }
+
+        static constexpr std::expected<ulid, errc> try_parse_narrow(std::string_view text) noexcept;
+        // Milliseconds since the Unix epoch.
+        [[nodiscard]]
+        constexpr std::uint64_t timestamp() const noexcept;
+
+        // The member order (hi, then lo) makes the defaulted comparison exactly the spec's
+        // left-to-right byte order.
+        friend constexpr std::strong_ordering operator<=>(ulid left, ulid right) = default;
+    };
+
+    template <typename CharT>
+    concept std_char = requires { typename std::char_traits<CharT>::char_type; };
+    // Returns true if the text is a valid ULID string, false otherwise.
+    template <std_char CharT>
+    [[nodiscard]]
+    constexpr bool is_valid(std::basic_string_view<CharT> text) noexcept;
+
+    // The fallible constructor of the constexpr domain: returns a valid ULID or an error condition
+    // (errc). This should really be an implementation detail if error_code could be made
+    // constexpr, but they can't.
+    template <std_char CharT>
+    [[nodiscard]]
+    constexpr std::expected<ulid, errc> try_parse(std::basic_string_view<CharT> text) noexcept;
 
     // Error category for errc, following the std::error_code idiom.
     class error_category : public std::error_category {
@@ -219,6 +249,80 @@ namespace ulid26 {
     // NOLINTNEXTLINE(*-avoid-c-arrays): This is a deduction helper for string literals.
     constexpr bool is_valid(CharT const (&text)[N]) noexcept {
         return is_valid(std::basic_string_view<CharT>{text, N - 1});
+    }
+
+    [[nodiscard]]
+    // Try parsing text as a ULID, assuming the length is correct.
+    constexpr std::expected<ulid, errc> ulid::try_parse_narrow(std::string_view text) noexcept {
+        using namespace detail;
+        // Overflow can only be declared if the rest of the string is valid, so the first
+        // character cannot be checked first.
+        // We'll optimistically parse first and then check for invalid characters and overflow
+        // in one pass.
+        std::array<std::uint8_t, kTextSize> decoded{};
+        std::transform(text.begin(), text.end(), decoded.begin(), [](char elem) {
+            auto const value = kDecode[static_cast<std::uint8_t>(elem)];
+            return value;
+        });
+        // accumulate the first kTimestampChars characters into the timestamp without any checks:
+        std::uint64_t timestamp = 0;
+        timestamp               = std::accumulate(
+            decoded.begin(), decoded.begin() + kTimestampChars, timestamp,
+            [](std::uint64_t acc, std::uint8_t value) { return (acc << kBitsPerChar) | value; }
+        );
+        std::uint64_t entropy_hi = 0;
+        entropy_hi               = std::accumulate(
+            decoded.begin() + kTimestampChars, decoded.begin() + kEntropySplitIndex, entropy_hi,
+            [](std::uint64_t acc, std::uint8_t value) { return (acc << kBitsPerChar) | value; }
+        );
+        auto const split_value = static_cast<std::uint64_t>(decoded[kEntropySplitIndex]);
+        // Entropy char 13 straddles the hi/lo halves, so we shift the hi half left by one and OR in
+        // the top bit of the straddle char.
+        entropy_hi             = (entropy_hi << 1U) | (split_value >> kStraddleShift);
+
+        std::uint64_t entropy_low = 0;
+        entropy_low               = std::accumulate(
+            decoded.begin() + kEntropySplitIndex, decoded.end(), entropy_low,
+            [](std::uint64_t acc, std::uint8_t value) { return (acc << kBitsPerChar) | value; }
+        );
+        // Check for invalid characters and overflow in one pass.
+        if (std::any_of(decoded.begin(), decoded.end(), [](std::uint8_t value) {
+                return value == kInvalidChar;
+            })) {
+            return std::unexpected(errc::invalid_character);
+        }
+        if (decoded[0] > kMaxFirstCharValue) {
+            return std::unexpected(errc::overflow);
+        }
+        std::uint64_t high = (timestamp << kTimestampShift) | entropy_hi;
+        ulid          result{high, entropy_low};
+        return result;
+    }
+
+    template <std_char CharT>
+    [[nodiscard]]
+    constexpr std::expected<ulid, errc> try_parse(std::basic_string_view<CharT> text) noexcept {
+        if (text.size() != detail::kTextSize) {
+            return std::unexpected(errc::invalid_length);
+        }
+        if constexpr (std::is_same_v<CharT, char>) {
+            return ulid::try_parse_narrow(text);
+        } else {
+            return detail::try_narrowing(text).and_then([](auto&& narrowed) {
+                return ulid::try_parse_narrow(std::string_view{narrowed.data(), narrowed.size()});
+            });
+        }
+    }
+
+    template <std_char CharT, std::size_t N>
+    [[nodiscard]]
+    // NOLINTNEXTLINE(*-avoid-c-arrays): This is a deduction helper for string literals.
+    constexpr std::expected<ulid, errc> try_parse(CharT const (&text)[N]) noexcept {
+        return try_parse(std::basic_string_view<CharT>{text, N - 1});
+    }
+
+    constexpr std::uint64_t ulid::timestamp() const noexcept {
+        return hi_ >> detail::kTimestampShift;
     }
 } // namespace ulid26
 
