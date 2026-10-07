@@ -146,6 +146,7 @@ namespace ulid26 {
         constexpr inline std::uint64_t kTimestampShift        = 16;
         constexpr inline std::uint64_t kEntropyHighMask       = 0xFFFF;
         constexpr inline std::uint8_t  kInvalidChar           = 0xFF;
+        constexpr inline std::uint16_t kInvalidMask           = 0x8000;
         constexpr inline std::uint64_t kHashSalt              = 0x9E3779B97F4A7C15ULL;
         constexpr inline std::size_t   kHashShiftLeft         = 6;
         constexpr inline std::size_t   kHashShiftRight        = 2;
@@ -159,7 +160,7 @@ namespace ulid26 {
         // Bounds-checked .at() is deliberately avoided: the indices are in range by construction,
         // and .at() is only constexpr from C++26 on (current standard libraries ship it as a DR, so
         // .at() would tie the constexpr decode core to vendor extensions).
-        consteval std::array<std::uint8_t, kDecodeTableSize> make_decode_table() {
+        consteval std::array<std::uint16_t, kDecodeTableSize> make_decode_table() {
             static constexpr std::size_t kCaseOffset = 32; // 'a' - 'A'
             // Safety bounds check: the biggest index into the array is the largest letter value in
             // the Crockford alphabet plus the case offset, that must still be smaller than the
@@ -170,8 +171,8 @@ namespace ulid26 {
                 "decode table overflow"
             );
 
-            std::array<std::uint8_t, kDecodeTableSize> table{};
-            table.fill(kInvalidChar);
+            std::array<std::uint16_t, kDecodeTableSize> table{};
+            table.fill(kInvalidMask);
 
             // Maps ASCII digits to their values.
             for (std::uint8_t digit = 0; digit < kDecimalDigitCount; ++digit) {
@@ -189,7 +190,7 @@ namespace ulid26 {
             return table;
         }
 
-        constexpr inline std::array<std::uint8_t, kDecodeTableSize> kDecode = make_decode_table();
+        constexpr inline std::array<std::uint16_t, kDecodeTableSize> kDecode = make_decode_table();
 
         // Constexpr decoding a wide string view into a narrow char array, assuming it contains only
         // valid ASCII characters, returning an error otherwise. Lenght assumed correct, as it's
@@ -221,7 +222,7 @@ namespace ulid26 {
                 return false;
             }
             return !std::any_of(text.begin(), text.end(), [](char elem) {
-                return kDecode[static_cast<std::uint8_t>(elem)] == kInvalidChar;
+                return kDecode[static_cast<std::uint8_t>(elem)] & kInvalidMask;
             });
         }
     } // namespace detail
@@ -261,7 +262,7 @@ namespace ulid26 {
         std::uint64_t    timestamp = 0;
         for (char const elem : tstamp) {
             std::uint64_t const value = kDecode[static_cast<std::uint8_t>(elem)];
-            if (value == kInvalidChar) {
+            if (value & kInvalidMask) {
                 return std::unexpected(errc::invalid_character);
             }
             timestamp = (timestamp << kBitsPerChar) | value;
@@ -271,7 +272,7 @@ namespace ulid26 {
         std::uint64_t    entropy_high = 0;
         for (char const elem : entropy_h) {
             std::uint64_t const value = kDecode[static_cast<std::uint8_t>(elem)];
-            if (value == kInvalidChar) {
+            if (value & kInvalidMask) {
                 return std::unexpected(errc::invalid_character);
             }
             entropy_high = (entropy_high << kBitsPerChar) | value;
@@ -279,7 +280,7 @@ namespace ulid26 {
 
         std::uint64_t const straddle_value =
             kDecode[static_cast<std::uint8_t>(text[kEntropySplitIndex])];
-        if (straddle_value == kInvalidChar) {
+        if (straddle_value & kInvalidMask) {
             return std::unexpected(errc::invalid_character);
         }
         entropy_high = (entropy_high << 1U) | (straddle_value >> kStraddleShift);
@@ -288,7 +289,7 @@ namespace ulid26 {
         std::uint64_t    entropy_low = straddle_value & kLowNibble;
         for (char const elem : entropy_l) {
             std::uint64_t const value = kDecode[static_cast<std::uint8_t>(elem)];
-            if (value == kInvalidChar) {
+            if (value & kInvalidMask) {
                 return std::unexpected(errc::invalid_character);
             }
             entropy_low = (entropy_low << kBitsPerChar) | value;
@@ -304,7 +305,7 @@ namespace ulid26 {
         // auto const result = std::accumulate(
         //     text.begin(), text.end(), decoder{}, [](decoder state, char elem) -> decoder {
         //         auto const value          = kDecode[static_cast<std::uint8_t>(elem)];
-        //         state.bad_bit             = state.bad_bit || value == kInvalidChar;
+        //         state.bad_bit             = state.bad_bit || value & kInvalidMask;
         //         std::uint64_t const carry = state.low >> (64 - kBitsPerChar);
         //         state.low                 = (state.low << kBitsPerChar) | value;
         //         state.high                = (state.high << kBitsPerChar) | carry;
