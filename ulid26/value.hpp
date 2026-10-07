@@ -44,9 +44,12 @@ namespace ulid26 {
         // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
         constexpr ulid(std::uint64_t high, std::uint64_t low) noexcept : hi_{high}, low_{low} {}
 
+      public:
         constexpr ulid() = default;
 
-      public:
+        static constexpr std::size_t kTextSize   = 26;
+        static constexpr std::size_t kBinarySize = 16;
+
         static constexpr ulid max() noexcept { return ulid{~std::uint64_t{0}, ~std::uint64_t{0}}; }
 
         static constexpr ulid min() noexcept { return ulid{}; }
@@ -115,8 +118,6 @@ namespace ulid26 {
     }
 
     namespace detail {
-        constexpr inline std::size_t   kTextSize              = 26;
-        constexpr inline std::size_t   kBinarySize            = 16;
         constexpr inline std::size_t   kHalfLength            = 8;
         constexpr inline std::size_t   kAlphabetSize          = 32;
         constexpr inline std::size_t   kDecodeTableSize       = 256;
@@ -199,15 +200,15 @@ namespace ulid26 {
         // called post length check in is_valid().
         template <std_char CharT>
         [[nodiscard]]
-        constexpr std::expected<std::array<char, kTextSize>, errc>
+        constexpr std::expected<std::array<char, ulid::kTextSize>, errc>
         try_narrowing(std::basic_string_view<CharT> text) noexcept {
             static_assert(
                 not std::is_same_v<CharT, char>,
                 "do not apply try_narrowing to char, use is_valid directly"
             );
-            std::array<char, kTextSize> result{};
-            static constexpr auto       kMaxChar = static_cast<CharT>(kAsciiMax);
-            for (std::size_t i = 0; i < kTextSize; ++i) {
+            std::array<char, ulid::kTextSize> result{};
+            static constexpr auto             kMaxChar = static_cast<CharT>(kAsciiMax);
+            for (std::size_t i = 0; i < result.size(); ++i) {
                 if (text[i] > kMaxChar) {
                     return std::unexpected(errc::invalid_character);
                 }
@@ -232,7 +233,7 @@ namespace ulid26 {
     template <std_char CharT>
     [[nodiscard]]
     constexpr bool is_valid(std::basic_string_view<CharT> text) noexcept {
-        if (text.size() != detail::kTextSize) {
+        if (text.size() != ulid::kTextSize) {
             return false;
         }
         if constexpr (std::is_same_v<CharT, char>) {
@@ -298,7 +299,7 @@ namespace ulid26 {
     template <std_char CharT>
     [[nodiscard]]
     constexpr std::expected<ulid, errc> try_parse(std::basic_string_view<CharT> text) noexcept {
-        if (text.size() != detail::kTextSize) {
+        if (text.size() != ulid::kTextSize) {
             return std::unexpected(errc::invalid_length);
         }
         if constexpr (std::is_same_v<CharT, char>) {

@@ -42,7 +42,7 @@ namespace {
     // silently benchmark the early reject instead).
     constexpr bool all_seeds_sized() {
         for (std::string_view seed : kSeeds) {
-            if (seed.size() != ulid26::detail::kTextSize) {
+            if (seed.size() != ulid26::ulid::kTextSize) {
                 return false;
             }
         }
@@ -53,7 +53,7 @@ namespace {
 
     struct corpus {
         corpus() {
-            text.reserve(kMaxCount * ulid26::detail::kTextSize);
+            text.reserve(kMaxCount * ulid26::ulid::kTextSize);
             for (std::size_t pos = 0; pos < kMaxCount; ++pos) {
                 text.append(kSeeds.at(pos % kSeeds.size()));
             }
@@ -76,12 +76,11 @@ namespace {
         std::size_t            accepted = 0;
         for (auto tick : state) {
             for (std::size_t pos = 0; pos < count; ++pos) {
-                accepted +=
-                    ulid26::is_valid(
-                        input.substr(pos * ulid26::detail::kTextSize, ulid26::detail::kTextSize)
-                    ) ?
-                        1U :
-                        0U;
+                accepted += ulid26::is_valid(
+                                input.substr(pos * ulid26::ulid::kTextSize, ulid26::ulid::kTextSize)
+                            ) ?
+                                1U :
+                                0U;
             }
             benchmark::DoNotOptimize(accepted);
         }
@@ -98,7 +97,7 @@ namespace {
             output.clear();
             for (std::size_t pos = 0; pos < count; ++pos) {
                 auto const part = ulid26::try_parse(
-                    input.substr(pos * ulid26::detail::kTextSize, ulid26::detail::kTextSize)
+                    input.substr(pos * ulid26::ulid::kTextSize, ulid26::ulid::kTextSize)
                 );
                 if (!part) {
                     state.SkipWithError("bad corpus");
