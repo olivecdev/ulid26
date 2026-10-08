@@ -132,8 +132,11 @@ namespace {
         std::string       text(count * ulid26::ulid::kTextSize, '\0');
         for (auto tick : state) {
             for (std::size_t pos = 0; pos < count; ++pos) {
-                fixture.ids.at(pos).to_chars(std::span<char, ulid26::ulid::kTextSize>{
-                    text.data() + pos * ulid26::ulid::kTextSize, ulid26::ulid::kTextSize});
+                fixture.ids.at(pos).to_chars(
+                    std::span<char, ulid26::ulid::kTextSize>{
+                        text.data() + pos * ulid26::ulid::kTextSize, ulid26::ulid::kTextSize
+                    }
+                );
             }
             benchmark::DoNotOptimize(text);
         }
@@ -141,9 +144,9 @@ namespace {
     }
 
     void bench_ours_strings(benchmark::State& state) {
-        std::size_t const          count   = static_cast<std::size_t>(state.range(0));
-        corpus const&              fixture = shared_corpus();
-        std::vector<std::string>   output(count);
+        std::size_t const        count   = static_cast<std::size_t>(state.range(0));
+        corpus const&            fixture = shared_corpus();
+        std::vector<std::string> output(count);
         for (auto tick : state) {
             for (std::size_t pos = 0; pos < count; ++pos) {
                 output.at(pos) = fixture.ids.at(pos).to_string();
@@ -172,8 +175,8 @@ namespace {
     }
 
     void bench_suyash_strings(benchmark::State& state) {
-        std::size_t const        count   = static_cast<std::size_t>(state.range(0));
-        corpus const&            fixture = shared_corpus();
+        std::size_t const count   = static_cast<std::size_t>(state.range(0));
+        corpus const&     fixture = shared_corpus();
         if (!fixture.agrees) {
             state.SkipWithError("corpus mismatch");
             return;

@@ -41,7 +41,7 @@
 
           shellHook = ''
             export CPM_USE_LOCAL_PACKAGES=1
-            echo "Welcome to the reopts development shell!"
+            echo "Welcome to the ulid26 development shell!"
           '';
         };
 

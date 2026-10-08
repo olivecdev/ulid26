@@ -30,11 +30,11 @@
 #include <span>
 #include <sstream>
 #include <streambuf>
-#include <unordered_set>
-#include <vector>
 #include <string>
 #include <string_view>
 #include <ulid26/value.hpp>
+#include <unordered_set>
+#include <vector>
 
 namespace {
 
@@ -141,7 +141,7 @@ namespace {
     }
 
     constexpr bool spells(ulid26::ulid id, std::string_view text) {
-        auto const             out  = spell(id);
+        auto const             out = spell(id);
         std::string_view const view{out.data(), out.size()};
         return view == text;
     }
@@ -153,7 +153,9 @@ namespace {
     // Encoding normalizes: lowercase parses, uppercase spells.
     static_assert(spells(*ulid26::try_parse("01arz3ndektsv4rrffq69g5fav"), kExample));
     // Maximum timestamp with nil entropy: the two fields spell independently.
-    static_assert(spells(*ulid26::try_parse("7ZZZZZZZZZ0000000000000000"), "7ZZZZZZZZZ0000000000000000"));
+    static_assert(
+        spells(*ulid26::try_parse("7ZZZZZZZZZ0000000000000000"), "7ZZZZZZZZZ0000000000000000")
+    );
 
     // Decode inverts encode, and every spelling validates.
     constexpr bool round_trips(ulid26::ulid id) {
@@ -171,17 +173,14 @@ namespace {
     // 64-bit platform). The nil hash is the salt itself: combine(0, 0).
     static_assert(ulid26::ulid::hash_value(ulid26::min()) == 11400714819323198485ULL);
     static_assert(ulid26::ulid::hash_value(ulid26::max()) == 2434343235958965292ULL);
-    static_assert(
-        ulid26::ulid::hash_value(*ulid26::try_parse(kExample)) == 4695206663305829115ULL
-    );
+    static_assert(ulid26::ulid::hash_value(*ulid26::try_parse(kExample)) == 4695206663305829115ULL);
     // Equal ids hash equal (including across case), boundaries hash distinct.
     static_assert(
         ulid26::ulid::hash_value(*ulid26::try_parse("01arz3ndektsv4rrffq69g5fav")) ==
         ulid26::ulid::hash_value(*ulid26::try_parse(kExample))
     );
     static_assert(
-        ulid26::ulid::hash_value(ulid26::min()) !=
-        ulid26::ulid::hash_value(ulid26::max())
+        ulid26::ulid::hash_value(ulid26::min()) != ulid26::ulid::hash_value(ulid26::max())
     );
 
     // The consteval literal spells compile-time constants: boundaries, the
@@ -195,15 +194,13 @@ namespace {
 
     // Constexpr spelling of an id into bytes (proof-side staging, mirroring
     // spell() on the text side).
-    constexpr std::array<std::uint8_t, ulid26::ulid::kBinarySize>
-    encode_bytes(ulid26::ulid id) {
+    constexpr std::array<std::uint8_t, ulid26::ulid::kBinarySize> encode_bytes(ulid26::ulid id) {
         std::array<std::uint8_t, ulid26::ulid::kBinarySize> out{};
         id.to_bytes(std::span<std::uint8_t, ulid26::ulid::kBinarySize>{out});
         return out;
     }
 
-    constexpr std::array<std::uint8_t, ulid26::ulid::kBinarySize>
-    filled(std::uint8_t value) {
+    constexpr std::array<std::uint8_t, ulid26::ulid::kBinarySize> filled(std::uint8_t value) {
         std::array<std::uint8_t, ulid26::ulid::kBinarySize> out{};
         out.fill(value);
         return out;
@@ -276,9 +273,8 @@ namespace {
     // bit_cast, so signed types compare patterns (not sign-extended values)
     // and std::byte needs no comparison operator.
     template <typename ByteT>
-    bool spells_bytes(
-        ulid26::ulid id, std::array<std::uint8_t, ulid26::ulid::kBinarySize> const& pin
-    ) {
+    bool
+    spells_bytes(ulid26::ulid id, std::array<std::uint8_t, ulid26::ulid::kBinarySize> const& pin) {
         std::array<ByteT, ulid26::ulid::kBinarySize> out{};
         id.to_bytes(std::span<ByteT, ulid26::ulid::kBinarySize>{out});
         for (std::size_t index = 0; index < out.size(); ++index) {
@@ -300,9 +296,8 @@ namespace {
             for (auto& slot : block) {
                 slot = std::bit_cast<ByteT>(rng.next_byte());
             }
-            auto const id = ulid26::ulid::from_bytes(
-                std::span<ByteT const, ulid26::ulid::kBinarySize>{block}
-            );
+            auto const id =
+                ulid26::ulid::from_bytes(std::span<ByteT const, ulid26::ulid::kBinarySize>{block});
             std::array<ByteT, ulid26::ulid::kBinarySize> back{};
             id.to_bytes(std::span<ByteT, ulid26::ulid::kBinarySize>{back});
             held = held && std::memcmp(back.data(), block.data(), back.size()) == 0;
@@ -316,9 +311,7 @@ namespace {
         ~failing_streambuf() override = default;
 
       protected:
-        int_type overflow(int_type) override {
-            return traits_type::eof();
-        }
+        int_type overflow(int_type) override { return traits_type::eof(); }
     };
 
 } // namespace
@@ -575,7 +568,7 @@ int main() {
         if (!example.has_value()) {
             return;
         }
-        bool same = true;
+        bool                     same = true;
         std::array<char16_t, 26> wide16{};
         example.value().to_chars(std::span<char16_t, 26>{wide16});
         std::array<char32_t, 26> wide32{};
@@ -613,7 +606,7 @@ int main() {
             if (parsed.has_value()) {
                 ++valid;
                 auto const text = spell(parsed.value());
-                held = held && std::string_view{text.data(), text.size()} == view;
+                held            = held && std::string_view{text.data(), text.size()} == view;
             }
         }
         expect(valid > 0) << "soup covered valid ids";
@@ -643,8 +636,7 @@ int main() {
         expect(grown == std::string{kExample}) << "back_insert sink grows";
         // Fixed sink: exactly 26 slots, the formatter's documented precondition.
         std::array<char, 26> fixed{};
-        auto const end =
-            std::format_to_n(fixed.data(), fixed.size(), "{}", example.value());
+        auto const end = std::format_to_n(fixed.data(), fixed.size(), "{}", example.value());
         expect(end.size == 26) << "format_to_n reports full size";
         expect(std::string_view{fixed.data(), fixed.size()} == kExample) << "fixed sink fills";
     };
@@ -706,7 +698,7 @@ int main() {
         }
         // Every sputc fails here: the operator must report badbit.
         failing_streambuf buf{};
-        std::ostream        failing{&buf};
+        std::ostream      failing{&buf};
         failing << example.value();
         expect(failing.bad()) << "write failure sets badbit";
     };
@@ -765,8 +757,8 @@ int main() {
 
     "stream input bad character"_test = [] {
         // Well-formed length, invalid alphabet: failbit, value untouched.
-        std::string        bad{kExample};
-        bad.back()         = '*';
+        std::string bad{kExample};
+        bad.back() = '*';
         std::istringstream in{bad};
         ulid26::ulid       id = ulid26::max();
         in >> id;
@@ -797,22 +789,20 @@ int main() {
             return;
         }
         std::wistringstream in{L"01ARZ3NDEKTSV4RRFFQ69G5FAV"};
-        ulid26::ulid       id{};
+        ulid26::ulid        id{};
         in >> id;
         expect(static_cast<bool>(in)) << "wide input stays good";
         expect(id == example.value()) << "wide input parses";
         std::wistringstream bad{L"01ARZ3NDEKTSV4RRFFQ69G5FA\u00E9"};
-        ulid26::ulid       bad_id = ulid26::max();
+        ulid26::ulid        bad_id = ulid26::max();
         bad >> bad_id;
         expect(!bad) << "non-ASCII wide input fails";
         expect(bad_id == ulid26::max()) << "non-ASCII wide input leaves value untouched";
     };
 
     "hash_value"_test = [] {
-        expect(
-            std::hash<ulid26::ulid>{}(ulid26::min()) ==
-            ulid26::ulid::hash_value(ulid26::min())
-        ) << "std::hash agrees";
+        expect(std::hash<ulid26::ulid>{}(ulid26::min()) == ulid26::ulid::hash_value(ulid26::min()))
+            << "std::hash agrees";
         expect(
             std::hash<ulid26::ulid>{}(*ulid26::try_parse(kExample)) ==
             ulid26::ulid::hash_value(*ulid26::try_parse(kExample))
@@ -933,9 +923,8 @@ int main() {
         }
         bool ordered = ids.size() > 2;
         for (std::size_t pos = 0; pos + 1 < ids.size() && ordered; ++pos) {
-            ordered = ordered &&
-                      ((encode_bytes(ids.at(pos)) <=> encode_bytes(ids.at(pos + 1))) ==
-                       (ids.at(pos) <=> ids.at(pos + 1)));
+            ordered = ordered && ((encode_bytes(ids.at(pos)) <=> encode_bytes(ids.at(pos + 1))) ==
+                                  (ids.at(pos) <=> ids.at(pos + 1)));
         }
         expect(ordered) << "byte order agrees with value order";
     };

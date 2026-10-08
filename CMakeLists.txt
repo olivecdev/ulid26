@@ -30,7 +30,6 @@ target_sources(ulid26
     FILES
         ulid26/batch.hpp
         ulid26/generators.hpp
-        ulid26/iostream.hpp
         ulid26/ranges.hpp
         ulid26/ulid26.hpp
         ulid26/value.hpp

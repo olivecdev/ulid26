@@ -67,13 +67,9 @@ namespace {
     // Output sink with an exact-fit put area: sized for the batch, so the
     // timed path never grows (no overflow, no allocation).
     struct buffered_sink : std::streambuf {
-        explicit buffered_sink(std::size_t size) : buffer_(size) {
-            reset();
-        }
+        explicit buffered_sink(std::size_t size) : buffer_(size) { reset(); }
 
-        void reset() {
-            setp(buffer_.data(), buffer_.data() + buffer_.size());
-        }
+        void reset() { setp(buffer_.data(), buffer_.data() + buffer_.size()); }
 
         ~buffered_sink() override = default;
 
@@ -118,7 +114,7 @@ namespace {
         // Loop accumulator by design; DoNotOptimize reads the final sum, so
         // every repetition's stores stay observable.
         // NOLINTNEXTLINE(misc-const-correctness)
-        std::uint64_t     total = 0;
+        std::uint64_t     total   = 0;
         for (auto tick : state) {
             buffered_sink sink(count * ulid26::ulid::kTextSize);
             std::ostream  out(&sink);
@@ -139,7 +135,8 @@ namespace {
         std::vector<ulid26::ulid> output(count);
         for (auto tick : state) {
             memory_source source(
-                fixture.text.data(), fixture.text.data() + count * ulid26::ulid::kTextSize);
+                fixture.text.data(), fixture.text.data() + count * ulid26::ulid::kTextSize
+            );
             std::istream in(&source);
             for (std::size_t pos = 0; pos < count; ++pos) {
                 in >> output.at(pos);

@@ -65,9 +65,16 @@ jobs:
         run: choco install opencppcoverage -y
       # cover_children: ctest spawns the test binaries, and those are what
       # execute the headers. Export Cobertura: gcovr ingests it at merge time.
+      # Absolute path: the choco installer mutates machine PATH, which is not
+      # guaranteed visible in later steps ("not recognized as a name of a
+      # cmdlet"), so never resolve OpenCppCoverage via PATH.
+      # Sources are scoped to the library subdir: the merge keys files as
+      # ulid26/<header> (matching the Linux gcovr side), so test sources and
+      # the fetched _deps headers must never enter the tracefile — gcovr
+      # aborts the whole report on entries it cannot resolve under --root.
       - name: test under coverage
         run: >
-          OpenCppCoverage --sources $env:GITHUB_WORKSPACE --cover_children
+          & "C:\Program Files\OpenCppCoverage\OpenCppCoverage.exe" --sources "$env:GITHUB_WORKSPACE\ulid26" --cover_children
           --export_type cobertura:coverage-win.xml --
           ctest --test-dir build/win-cov -C Debug --output-on-failure
       - name: upload tracefile
@@ -88,13 +95,14 @@ jobs:
         with:
           pattern: coverage-*
           merge-multiple: true
-      # gcovr merges by filename: strip backslashes, pin the source root,
-      # and cut the Windows workspace prefix down to the repo-relative
-      # ulid26/ path, so both tracefiles address the same files.
+      # gcovr merges by filename: strip backslashes, pin the source root, and
+      # reduce every entry to ulid26/<header> (the headers are flat, so the
+      # basename is the key), matching the Linux tracefile keys. The scoped
+      # --sources on the Windows side guarantees only headers are present.
       - name: normalize Windows paths
         run: >
           sed -i 's|\\|/|g; s|<source>[^<]*</source>|<source>.</source>|g;
-          s|filename="[^"]*ulid26/|filename="ulid26/|g' coverage-win.xml
+          s|filename="[^"]*/|filename="|g; s|filename="|filename="ulid26/|g' coverage-win.xml
       # The gate lives here, on the combined report: platform-specific code
       # (the MSVC CAS tier, GCC attributes) contributes hits from the side
       # that executes it, and the per-side rows in the HTML show exactly
@@ -102,18 +110,24 @@ jobs:
       # (GCC counts noexcept-unreachable unwind arcs). gcov misattributes
       # arcs on the reservation ternary (GCC bug 68080: negative hits), so
       # that parse error class is downgraded to a warning.
+      # Single self-contained page (static, no JS): --html-details with a
+      # bare prefix scatters siblings (index, .css, per-file pages) next to
+      # the prefix, and the upload only carried the index — every link rotted.
+      # --html-single-page collapses all of it into one file, so there is
+      # exactly one artifact and no link can point nowhere. Drop `static` for
+      # the interactive (JS) variant; the data is identical either way.
       - name: merge, gate, report
         run: >
           nix develop --command gcovr --json-add-tracefile coverage-linux.json
           --cobertura-add-tracefile coverage-win.xml --root .
           --filter 'ulid26/.*' --print-summary --fail-under-line 90
           --gcov-ignore-parse-errors negative_hits.warn_once_per_file
-          --html-details coverage-html
+          --html-details --html-single-page static --output coverage-html.html
       - name: upload HTML report
         uses: actions/upload-artifact@v4
         with:
           name: coverage-html
-          path: coverage-html
+          path: coverage-html.html
 
   fuzz:
     runs-on: ubuntu-latest
@@ -152,7 +166,6 @@ jobs:
         run: >
           nix develop --command clang-format --dry-run --Werror
           ulid26/ulid26.hpp ulid26/value.hpp ulid26/generators.hpp ulid26/batch.hpp ulid26/ranges.hpp
-          test/test_constexpr.cpp test/test_ulid.cpp test/test_generate.cpp
-          test/test_batch.cpp test/test_ranges.cpp
-          bench/bench_batch.cpp bench/bench_reference.cpp bench/bench_ranges.cpp
+          test/value_test.cpp
+          bench/bench_bytes.cpp bench/bench_is_valid.cpp bench/bench_streams.cpp bench/bench_to_chars.cpp
           fuzz/fuzz_text.cpp

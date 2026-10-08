@@ -1,0 +1,12 @@
+# libFuzzer writes newly-discovered inputs beside the seeds during local runs
+# (40-hex-char filenames). Only the curated seed files below are versioned.
+*
+!.gitignore
+!alpha
+!long
+!lower
+!max
+!nil
+!overflow
+!short
+!typical

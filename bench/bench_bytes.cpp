@@ -114,11 +114,13 @@ namespace {
             for (std::string_view seed : kSeeds) {
                 std::array<std::byte, ulid26::ulid::kBinarySize> ours_spelled{};
                 ulid26::try_parse(seed).value().to_bytes(
-                    std::span<std::byte, ulid26::ulid::kBinarySize>{ours_spelled});
+                    std::span<std::byte, ulid26::ulid::kBinarySize>{ours_spelled}
+                );
                 std::array<std::uint8_t, ulid26::ulid::kBinarySize> ref_spelled{};
                 ulid::MarshalBinaryTo(ulid::Unmarshal(upper_copy(seed)), ref_spelled.data());
-                agrees = agrees && std::memcmp(ours_spelled.data(), ref_spelled.data(),
-                                               ours_spelled.size()) == 0;
+                agrees =
+                    agrees &&
+                    std::memcmp(ours_spelled.data(), ref_spelled.data(), ours_spelled.size()) == 0;
             }
 #endif
         }
@@ -126,9 +128,9 @@ namespace {
         std::vector<ulid26::ulid> ids{};
         std::vector<std::byte>    bytes{};
 #ifdef ULID26_HAVE_SUYASH
-        std::vector<ulid::ULID>  ref{};
+        std::vector<ulid::ULID>   ref{};
         std::vector<std::uint8_t> ref_bytes{};
-        bool                     agrees = true;
+        bool                      agrees = true;
 #endif
     };
 
@@ -138,14 +140,16 @@ namespace {
     }
 
     void bench_to_bytes(benchmark::State& state) {
-        std::size_t const count   = static_cast<std::size_t>(state.range(0));
-        corpus const&     fixture = shared_corpus();
+        std::size_t const      count   = static_cast<std::size_t>(state.range(0));
+        corpus const&          fixture = shared_corpus();
         std::vector<std::byte> output(count * ulid26::ulid::kBinarySize);
         for (auto tick : state) {
             for (std::size_t pos = 0; pos < count; ++pos) {
-                fixture.ids.at(pos).to_bytes(std::span<std::byte, ulid26::ulid::kBinarySize>{
-                    output.data() + pos * ulid26::ulid::kBinarySize,
-                    ulid26::ulid::kBinarySize});
+                fixture.ids.at(pos).to_bytes(
+                    std::span<std::byte, ulid26::ulid::kBinarySize>{
+                        output.data() + pos * ulid26::ulid::kBinarySize, ulid26::ulid::kBinarySize
+                    }
+                );
             }
             benchmark::DoNotOptimize(output);
         }
@@ -161,7 +165,9 @@ namespace {
                 output.at(pos) = ulid26::ulid::from_bytes(
                     std::span<std::byte const, ulid26::ulid::kBinarySize>{
                         fixture.bytes.data() + pos * ulid26::ulid::kBinarySize,
-                        ulid26::ulid::kBinarySize});
+                        ulid26::ulid::kBinarySize
+                    }
+                );
             }
             benchmark::DoNotOptimize(output);
         }
@@ -170,8 +176,8 @@ namespace {
 
 #ifdef ULID26_HAVE_SUYASH
     void bench_suyash_marshal_binary(benchmark::State& state) {
-        std::size_t const       count   = static_cast<std::size_t>(state.range(0));
-        corpus const&           fixture = shared_corpus();
+        std::size_t const count   = static_cast<std::size_t>(state.range(0));
+        corpus const&     fixture = shared_corpus();
         if (!fixture.agrees) {
             state.SkipWithError("corpus mismatch");
             return;
@@ -180,7 +186,8 @@ namespace {
         for (auto tick : state) {
             for (std::size_t pos = 0; pos < count; ++pos) {
                 ulid::MarshalBinaryTo(
-                    fixture.ref.at(pos), output.data() + pos * ulid26::ulid::kBinarySize);
+                    fixture.ref.at(pos), output.data() + pos * ulid26::ulid::kBinarySize
+                );
             }
             benchmark::DoNotOptimize(output);
         }
@@ -188,8 +195,8 @@ namespace {
     }
 
     void bench_suyash_unmarshal_binary(benchmark::State& state) {
-        std::size_t const     count   = static_cast<std::size_t>(state.range(0));
-        corpus const&         fixture = shared_corpus();
+        std::size_t const count   = static_cast<std::size_t>(state.range(0));
+        corpus const&     fixture = shared_corpus();
         if (!fixture.agrees) {
             state.SkipWithError("corpus mismatch");
             return;
@@ -199,7 +206,8 @@ namespace {
             for (std::size_t pos = 0; pos < count; ++pos) {
                 ulid::ULID id{};
                 ulid::UnmarshalBinaryFrom(
-                    fixture.ref_bytes.data() + pos * ulid26::ulid::kBinarySize, id);
+                    fixture.ref_bytes.data() + pos * ulid26::ulid::kBinarySize, id
+                );
                 output.at(pos) = id;
             }
             benchmark::DoNotOptimize(output);
