@@ -33,6 +33,17 @@
 #include <system_error>
 
 namespace ulid26 {
+    // A Universally Unique Lexicographically Sortable Identifier (ULID): a 48-bit millisecond
+    // timestamp followed by 80 bits of entropy. Pure value type — closed to user manipulation,
+    // trivially copyable, fully constexpr.
+    class ulid;
+
+    namespace literals {
+        /// Opt-in operator for the suffix _ulid, which parses a literal at compile time and fails
+        /// the build if the literal is invalid.
+        consteval ulid operator""_ulid(char const* text, std::size_t size);
+    } // namespace literals
+
     // Error conditions for every fallible operation in this library.
     // Given a scoped enum can hold values outside of the defined enumerators, value-initializing
     // this errc results in a zero-value, which is intentionally not an error.
@@ -61,64 +72,125 @@ namespace ulid26 {
     template <typename IterT, typename CharT>
     concept char_sink = std_char<CharT> && std::output_iterator<IterT, CharT>;
 
-    // A Universally Unique Lexicographically Sortable Identifier (ULID): a 48-bit millisecond
-    // timestamp followed by 80 bits of entropy. Pure value type — closed to user manipulation,
-    // trivially copyable, fully constexpr.
+    // Returns true if the text is a valid ULID string, false otherwise.
+    template <std_char CharT>
+    [[nodiscard]]
+    constexpr bool is_valid(std::basic_string_view<CharT> text) noexcept;
+
     class ulid {
-        std::uint64_t hi_{0}, low_{0};
-
-        // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-        constexpr explicit ulid(std::uint64_t high, std::uint64_t low) noexcept :
-            hi_{high}, low_{low} {}
-
-        friend struct std::formatter<ulid26::ulid>;
-
-        // Danger zone: output to a sink iterator may lead to crashes or undefined behaviour if the
-        // destination doesn't have enough space.
-        template <std_char CharT, typename IterT>
-            requires char_sink<IterT, CharT>
-        [[nodiscard]]
-        constexpr IterT to_chars_impl(IterT slot) const noexcept;
-
       public:
-        constexpr ulid() = default;
+        constexpr ulid()                                                         = default;
+        // The member order (hi, then lo) makes the defaulted comparison exactly the spec's
+        // left-to-right byte order.
+        friend constexpr std::strong_ordering operator<=>(ulid left, ulid right) = default;
 
         static constexpr std::size_t kTextSize   = 26;
         static constexpr std::size_t kBinarySize = 16;
 
-        static constexpr ulid max() noexcept { return ulid{~std::uint64_t{0}, ~std::uint64_t{0}}; }
-
-        static constexpr ulid min() noexcept { return ulid{}; }
-
-        static constexpr std::expected<ulid, errc> try_parse_narrow(std::string_view text) noexcept;
-        static std::expected<ulid, std::error_code> from_string(std::string_view text) noexcept;
-        template <std_byte ByteT>
-        static constexpr ulid from_bytes(std::span<ByteT const, kBinarySize> bytes) noexcept;
         // Milliseconds since the Unix epoch.
         [[nodiscard]]
         constexpr std::uint64_t timestamp() const noexcept;
 
-        // The member order (hi, then lo) makes the defaulted comparison exactly the spec's
-        // left-to-right byte order.
-        friend constexpr std::strong_ordering operator<=>(ulid left, ulid right) = default;
-        // Non-allocating write of the canonical 26 characters into caller storage, in any
+        /// Binary serialization API: 16 bytes in big-endian order, any 16-bytes value is inherently
+        /// a valid ULID, thus the API is infallible.
+        template <std_byte ByteT>
+        [[nodiscard]]
+        static constexpr ulid from_bytes(std::span<ByteT const, kBinarySize> bytes) noexcept;
+        template <std_byte ByteT>
+        constexpr void to_bytes(std::span<ByteT, kBinarySize> bytes) const noexcept;
+
+        /// Text oriented API: 26 characters in Crockford base32 alphabet, range from
+        /// "00000000000000000000000000" to "7ZZZZZZZZZZZZZZZZZZZZZZZZZ". The text API is fallible,
+        /// as not all 26-character strings are valid ULIDs. Functions returning std::error_code
+        /// cannot be made constexpr.
+        /// from_string: parses a string view into a ULID.
+        template <std_char CharT>
+        [[nodiscard]]
+        static std::expected<ulid, std::error_code>
+        from_string(std::basic_string_view<CharT> text) noexcept;
+
+        /// from_string overload for C-style string literals (null-terminated).
+        template <std_char CharT, std::size_t N>
+        [[nodiscard]]
+        // NOLINTNEXTLINE(*-avoid-c-arrays): This is a deduction helper for string literals.
+        static std::expected<ulid, std::error_code> from_string(CharT const (&text)[N]) noexcept {
+            return from_string<CharT>(std::basic_string_view<CharT>{text, N - 1});
+        }
+
+        /// from_string overload for owning strings (std::basic_string types).
+        template <std_char CharT, typename TraitsT, typename AllocT>
+        [[nodiscard]]
+        static std::expected<ulid, std::error_code>
+        from_string(std::basic_string<CharT, TraitsT, AllocT> const& text) noexcept {
+            return from_string<CharT>(std::basic_string_view<CharT>{text.data(), text.size()});
+        }
+
+        // to_chars: Non-allocating write of the canonical 26 characters into caller storage, in any
         // character type. This is the zero-allocation path: the client sizes the string (or
         // array, or CharT[26]), the library only fills it. See to_string for the owning form.
         template <std_char CharT = char>
         constexpr void to_chars(std::span<CharT, kTextSize> out) const noexcept;
-        // Owning string form in any character type and allocator: exactly one allocation via
-        // resize_and_overwrite, no default-fill, no intermediate copy. Hot paths that cannot
-        // allocate use to_chars into caller storage.
+
+        // to_string: convenience API to construct owning string form in any character type and
+        // allocator: exactly one allocation via resize_and_overwrite, no default-fill, no
+        // intermediate copy. Hot paths that cannot allocate use to_chars into caller storage.
         template <std_char CharT = char, typename AllocT = std::allocator<CharT>>
         [[nodiscard]]
         std::basic_string<CharT, std::char_traits<CharT>, AllocT>
-        to_string(AllocT const& alloc = AllocT{}) const;
-        template <std_byte ByteT>
-        constexpr void to_bytes(std::span<ByteT, kBinarySize> bytes) const noexcept;
+        to_string(AllocT const& alloc = AllocT{}) const {
+            std::basic_string<CharT, std::char_traits<CharT>, AllocT> text(alloc);
+            text.resize_and_overwrite(kTextSize, [this](CharT* buffer, std::size_t) {
+                to_chars(std::span<CharT, kTextSize>{buffer, kTextSize});
+                return kTextSize;
+            });
+            return text;
+        }
 
         [[nodiscard]]
         static constexpr std::size_t hash_value(ulid value) noexcept;
 
+      private:
+        std::uint64_t hi_{0}, low_{0};
+
+        /// Infallible constructor for internal use: the caller guarantees that hi and low compose a
+        /// valid ULID.
+        // NOLINTNEXTLINE(*-swappable-parameters).
+        constexpr ulid(std::uint64_t hi, std::uint64_t low) noexcept : hi_{hi}, low_{low} {}
+
+        // Outputs into a sink iterator. Precondition: the sink must have at least 26 writable
+        // slots, otherwise the behavior is undefined. This precondition is not verifiable in this
+        // function.
+        template <std_char CharT, typename IterT>
+            requires char_sink<IterT, CharT>
+        [[nodiscard]]
+        constexpr IterT to_chars_unchecked(IterT slot) const noexcept;
+
+        // Fallible mutator for the constexpr domain: returns an error condition if the parse failed
+        // without mutating *this, performing full validation while parsing, except input length.
+        // Precondition: text.size() == kTextSize, otherwise the behavior is undefined.
+        template <std_char CharT>
+        [[nodiscard]]
+        constexpr errc try_parse_assume_length(std::basic_string_view<CharT> text) noexcept;
+
+        /// Friends
+        friend constexpr ulid max() noexcept;
+
+        friend constexpr ulid min() noexcept;
+
+        // Cooperation with the standard format library.
+        friend struct std::formatter<ulid26::ulid>;
+
+        // literal suffix operator needs friendship.
+        friend consteval ulid literals::operator""_ulid(char const* text, std::size_t size);
+
+        // The fallible free function constructor of the constexpr domain for public usage: returns
+        // a valid ULID or an error condition (errc). This should really be an implementation detail
+        // if error_code could be made constexpr, but they can't.
+        template <std_char CharT>
+        friend constexpr std::expected<ulid, errc>
+        try_parse(std::basic_string_view<CharT> text) noexcept;
+
+        /// Interoperability with the standard library: stream operators for text I/O.
         template <std_char CharT, typename Traits = std::char_traits<CharT>>
         friend std::basic_ostream<CharT, Traits>&
         operator<<(std::basic_ostream<CharT, Traits>& out, ulid value) {
@@ -139,31 +211,23 @@ namespace ulid26 {
             if (!guard) {
                 return in;
             }
-            std::array<CharT, ulid::text_size> chars{};
+            std::array<CharT, ulid::kTextSize> chars{};
             if (!in.read(chars.data(), static_cast<std::streamsize>(ulid::kTextSize))) {
                 return in; // read() already set failbit (and eofbit at end of input)
             }
-            auto const parsed = ulid::from_string(std::string_view{chars.data(), chars.size()});
-            if (!parsed) {
+            auto const err = value.try_parse_assume_length<CharT>(
+                std::basic_string_view<CharT>{chars.data(), chars.size()}
+            );
+            if (err != errc{}) {
                 in.setstate(std::ios_base::failbit);
-                return in;
             }
-            id = *parsed;
             return in;
         }
-    };
+    }; // class ulid
 
-    // Returns true if the text is a valid ULID string, false otherwise.
-    template <std_char CharT>
-    [[nodiscard]]
-    constexpr bool is_valid(std::basic_string_view<CharT> text) noexcept;
+    constexpr ulid max() noexcept { return ulid{~std::uint64_t{0}, ~std::uint64_t{0}}; }
 
-    // The fallible constructor of the constexpr domain: returns a valid ULID or an error
-    // condition (errc). This should really be an implementation detail if error_code could be
-    // made constexpr, but they can't.
-    template <std_char CharT>
-    [[nodiscard]]
-    constexpr std::expected<ulid, errc> try_parse(std::basic_string_view<CharT> text) noexcept;
+    constexpr ulid min() noexcept { return ulid{}; }
 
     // Error category for errc, following the std::error_code idiom.
     class error_category : public std::error_category {
@@ -282,17 +346,17 @@ namespace ulid26 {
 
         constexpr inline std::array<std::uint8_t, kDecodeTableSize> kDecode = make_decode_table();
 
-        // Constexpr decoding a wide string view into a narrow char array, assuming it contains
-        // only valid ASCII characters, returning an error otherwise. Lenght assumed correct, as
-        // it's called post length check in is_valid().
+        // Constexpr decoding a wide string view into a narrow char array, provided it contains
+        // only valid ASCII characters, returning an error condition otherwise. Lenght assumed
+        // correct, as it's called post length check in is_valid().
         template <std_char CharT>
         [[nodiscard]]
         constexpr std::expected<std::array<char, ulid::kTextSize>, errc>
-        try_narrowing(std::basic_string_view<CharT> text) noexcept {
-            static_assert(
-                not std::is_same_v<CharT, char>,
-                "do not apply try_narrowing to char, use is_valid directly"
-            );
+        try_narrowing_assume_length(std::basic_string_view<CharT> text) noexcept {
+            // static_assert(
+            //     not std::is_same_v<CharT, char>,
+            //     "do not apply try_narrowing to char, use is_valid directly"
+            // );
             std::array<char, ulid::kTextSize> result{};
             static constexpr auto             kMaxChar = static_cast<CharT>(kAsciiMax);
             for (std::size_t i = 0; i < result.size(); ++i) {
@@ -326,7 +390,7 @@ namespace ulid26 {
         if constexpr (std::is_same_v<CharT, char>) {
             return detail::is_valid_narrowed(text);
         } else {
-            return detail::try_narrowing(text)
+            return detail::try_narrowing_assume_length(text)
                 .transform([](auto&& narrowed) {
                     return detail::is_valid_narrowed(
                         std::string_view{narrowed.data(), narrowed.size()}
@@ -343,9 +407,9 @@ namespace ulid26 {
         return is_valid(std::basic_string_view<CharT>{text, N - 1});
     }
 
+    template <>
     [[nodiscard]]
-    // Try parsing text as a ULID, assuming the length is correct.
-    constexpr std::expected<ulid, errc> ulid::try_parse_narrow(std::string_view text) noexcept {
+    constexpr errc ulid::try_parse_assume_length(std::basic_string_view<char> text) noexcept {
         using namespace detail;
         std::uint64_t bad  = 0;
         auto          fold = [&bad](std::uint64_t acc, char elem) -> std::uint64_t {
@@ -365,7 +429,7 @@ namespace ulid26 {
         std::uint64_t const straddle_value =
             kDecode[static_cast<std::uint8_t>(text[kEntropySplitIndex])];
         if ((straddle_value & kErrorChannelMask) != 0) {
-            return std::unexpected(errc::invalid_character);
+            return errc::invalid_character;
         }
         entropy_high = (entropy_high << 1U) | (straddle_value >> kStraddleShift);
 
@@ -374,35 +438,32 @@ namespace ulid26 {
             std::accumulate(entropy_l.begin(), entropy_l.end(), straddle_value & kLowNibble, fold);
 
         if ((bad & kErrorChannelMask) != 0) {
-            return std::unexpected(errc::invalid_character);
+            return errc::invalid_character;
         }
         if (text[0] > kMaxFirstCharValue) {
-            return std::unexpected(errc::overflow);
+            return errc::overflow;
         }
-        std::uint64_t const high = (timestamp << kTimestampShift) | entropy_high;
-        return ulid{high, entropy_low};
+        // The actual state is only ever touched if the parse succeeded, so the object remains
+        // unchanged on error.
+        hi_  = (timestamp << kTimestampShift) | entropy_high;
+        low_ = entropy_low;
+        return errc{};
     }
 
     template <std_char CharT>
     [[nodiscard]]
-    constexpr std::expected<ulid, errc> try_parse(std::basic_string_view<CharT> text) noexcept {
-        if (text.size() != ulid::kTextSize) {
-            return std::unexpected(errc::invalid_length);
+    constexpr errc ulid::try_parse_assume_length(std::basic_string_view<CharT> text) noexcept {
+        static_assert(
+            not std::is_same_v<CharT, char>,
+            "do not apply try_parse to char, use the char overload directly"
+        );
+        auto const narrow = detail::try_narrowing_assume_length(text);
+        if (!narrow) {
+            return narrow.error();
         }
-        if constexpr (std::is_same_v<CharT, char>) {
-            return ulid::try_parse_narrow(text);
-        } else {
-            return detail::try_narrowing(text).and_then([](auto&& narrowed) {
-                return ulid::try_parse_narrow(std::string_view{narrowed.data(), narrowed.size()});
-            });
-        }
-    }
-
-    template <std_char CharT, std::size_t N>
-    [[nodiscard]]
-    // NOLINTNEXTLINE(*-avoid-c-arrays): This is a deduction helper for string literals.
-    constexpr std::expected<ulid, errc> try_parse(CharT const (&text)[N]) noexcept {
-        return try_parse(std::basic_string_view<CharT>{text, N - 1});
+        return try_parse_assume_length<char>(
+            std::basic_string_view<char>{narrow->data(), narrow->size()}
+        );
     }
 
     constexpr std::uint64_t ulid::timestamp() const noexcept {
@@ -416,26 +477,54 @@ namespace ulid26 {
         // themselves (using namespace ulid26::literals to opt in).
         [[nodiscard]]
         consteval ulid operator""_ulid(char const* text, std::size_t size) {
-            auto const parsed = try_parse(std::string_view{text, size});
-            if (!parsed) {
+            if (size != ulid::kTextSize) {
+                throw std::runtime_error("ulid: literal must be exactly 26 characters long");
+            }
+            ulid       result{};
+            auto const err = result.try_parse_assume_length(std::string_view{text, size});
+            if (err != errc{}) {
                 throw std::runtime_error(
-                    "ulid: invalid literal (expected 26 Crockford base32 characters)"
+                    "ulid: literal does not conform to the Crockford base32 alphabet"
                 );
             }
-            return *parsed;
+            return result;
         }
 
     } // namespace literals
 
+    template <std_char CharT>
     [[nodiscard]]
-    inline std::expected<ulid, std::error_code> ulid::from_string(std::string_view text) noexcept {
-        return try_parse(text).transform_error(make_error_code);
+    constexpr std::expected<ulid, errc> try_parse(std::basic_string_view<CharT> text) noexcept {
+        std::expected<ulid, errc> result{};
+        if (text.size() != ulid::kTextSize) {
+            result = std::unexpected(errc::invalid_length);
+            return result;
+        }
+        auto err = result->try_parse_assume_length(text);
+        if (err != errc{}) {
+            result = std::unexpected(err);
+        }
+        return result;
+    }
+
+    template <std_char CharT, std::size_t N>
+    [[nodiscard]]
+    // NOLINTNEXTLINE(*-avoid-c-arrays): This is a deduction helper for string literals.
+    constexpr std::expected<ulid, errc> try_parse(CharT const (&text)[N]) noexcept {
+        return try_parse(std::basic_string_view<CharT>{text, N - 1});
+    }
+
+    template <std_char CharT>
+    [[nodiscard]]
+    std::expected<ulid, std::error_code>
+    ulid::from_string(std::basic_string_view<CharT> text) noexcept {
+        return ulid26::try_parse<CharT>(text).transform_error(make_error_code);
     }
 
     template <std_char CharT, typename IterT>
         requires char_sink<IterT, CharT>
     [[nodiscard]]
-    constexpr IterT ulid::to_chars_impl(IterT slot) const noexcept {
+    constexpr IterT ulid::to_chars_unchecked(IterT slot) const noexcept {
         // NOLINTNEXTLINE(bugprone-easily-swappable-parameters): local private helper.
         auto encode = [&slot](std::uint64_t value, std::size_t shift, std::size_t boundary) {
             for (std::size_t i = 0; i < boundary; ++i) {
@@ -462,19 +551,9 @@ namespace ulid26 {
 
     template <std_char CharT>
     constexpr void ulid::to_chars(std::span<CharT, ulid::kTextSize> out) const noexcept {
+        // Compile-time checked that out has exactly 26 writable slots.
         [[maybe_unused]]
-        auto it = to_chars_impl<CharT>(out.begin());
-    }
-
-    template <std_char CharT, typename AllocT>
-    std::basic_string<CharT, std::char_traits<CharT>, AllocT>
-    ulid::to_string(AllocT const& alloc) const {
-        std::basic_string<CharT, std::char_traits<CharT>, AllocT> text(alloc);
-        text.resize_and_overwrite(kTextSize, [this](CharT* buffer, std::size_t) {
-            to_chars(std::span<CharT, kTextSize>{buffer, kTextSize});
-            return kTextSize;
-        });
-        return text;
+        auto iter = to_chars_unchecked<CharT>(out.begin());
     }
 
     [[nodiscard]]
@@ -556,7 +635,7 @@ namespace std {
         template <typename FmtCtx>
         [[nodiscard]]
         FmtCtx::iterator format(ulid26::ulid value, FmtCtx& ctx) const {
-            return value.to_chars_impl<CharT>(ctx.out());
+            return value.to_chars_unchecked<CharT>(ctx.out());
         }
     };
 } // namespace std

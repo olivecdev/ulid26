@@ -47,3 +47,6 @@ if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     target_include_directories(bench_bytes PRIVATE ${suyash_ulid_SOURCE_DIR}/src)
     target_compile_definitions(bench_bytes PRIVATE ULID26_HAVE_SUYASH)
 endif()
+
+add_executable(bench_streams bench_streams.cpp)
+target_link_libraries(bench_streams PRIVATE ulid26 benchmark::benchmark)
