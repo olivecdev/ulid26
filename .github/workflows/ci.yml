@@ -13,7 +13,7 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
       - name: configure, build, test, package
-        run: nix develop --command cmake --workflow --preset ci
+        run: nix run .#ci
 
   sanitize:
     runs-on: ubuntu-latest
@@ -22,7 +22,7 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
       - name: configure, build, test under ASan/UBSan
-        run: nix develop --command cmake --workflow --preset san
+        run: nix run .#san
 
   tsan:
     runs-on: ubuntu-latest
@@ -31,7 +31,7 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
       - name: configure, build, test under TSan
-        run: nix develop --command cmake --workflow --preset tsan
+        run: nix run .#tsan
 
   coverage-linux:
     runs-on: ubuntu-latest
@@ -39,12 +39,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
+      # Workflow app (see the workflows set in flake.nix): suite plus the
+      # Linux tracefile for the merge.
       - name: configure, build, test with coverage
-        run: nix develop --command cmake --workflow --preset cov
-      - name: emit tracefile
-        run: >
-          nix develop --command gcovr --root . --object-directory build/cov
-          --filter 'ulid26/.*' --json -o coverage-linux.json
+        run: nix run .#cov
       - name: upload tracefile
         uses: actions/upload-artifact@v4
         with:
@@ -72,9 +70,14 @@ jobs:
       # ulid26/<header> (matching the Linux gcovr side), so test sources and
       # the fetched _deps headers must never enter the tracefile — gcovr
       # aborts the whole report on entries it cannot resolve under --root.
+      # continue_after_cpp_exception: the suite deliberately throws and
+      # catches (the throwing-allocator probe). The default is to break into
+      # the debugger on any C++ exception — with no debugger attached the run
+      # hangs until the timeout instead of finishing.
       - name: test under coverage
         run: >
           & "C:\Program Files\OpenCppCoverage\OpenCppCoverage.exe" --sources "$env:GITHUB_WORKSPACE\ulid26" --cover_children
+          --continue_after_cpp_exception
           --export_type cobertura:coverage-win.xml --
           ctest --test-dir build/win-cov -C Debug --output-on-failure
       - name: upload tracefile
@@ -95,34 +98,11 @@ jobs:
         with:
           pattern: coverage-*
           merge-multiple: true
-      # gcovr merges by filename: strip backslashes, pin the source root, and
-      # reduce every entry to ulid26/<header> (the headers are flat, so the
-      # basename is the key), matching the Linux tracefile keys. The scoped
-      # --sources on the Windows side guarantees only headers are present.
-      - name: normalize Windows paths
-        run: >
-          sed -i 's|\\|/|g; s|<source>[^<]*</source>|<source>.</source>|g;
-          s|filename="[^"]*/|filename="|g; s|filename="|filename="ulid26/|g' coverage-win.xml
-      # The gate lives here, on the combined report: platform-specific code
-      # (the MSVC CAS tier, GCC attributes) contributes hits from the side
-      # that executes it, and the per-side rows in the HTML show exactly
-      # which side covers what. Branch ratio stays informational
-      # (GCC counts noexcept-unreachable unwind arcs). gcov misattributes
-      # arcs on the reservation ternary (GCC bug 68080: negative hits), so
-      # that parse error class is downgraded to a warning.
-      # Single self-contained page (static, no JS): --html-details with a
-      # bare prefix scatters siblings (index, .css, per-file pages) next to
-      # the prefix, and the upload only carried the index — every link rotted.
-      # --html-single-page collapses all of it into one file, so there is
-      # exactly one artifact and no link can point nowhere. Drop `static` for
-      # the interactive (JS) variant; the data is identical either way.
+      # Workflow app (see the workflows set in flake.nix): normalize the
+      # Windows tracefile, merge, gate line coverage at 90, emit the
+      # self-contained HTML page. Rationale for each flag lives with the app.
       - name: merge, gate, report
-        run: >
-          nix develop --command gcovr --json-add-tracefile coverage-linux.json
-          --cobertura-add-tracefile coverage-win.xml --root .
-          --filter 'ulid26/.*' --print-summary --fail-under-line 90
-          --gcov-ignore-parse-errors negative_hits.warn_once_per_file
-          --html-details --html-single-page static --output coverage-html.html
+        run: nix run .#merge
       - name: upload HTML report
         uses: actions/upload-artifact@v4
         with:
@@ -136,12 +116,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
-      - name: configure, build fuzz harness
-        run: nix develop --command cmake --workflow --preset fuzz
-      # Deterministic seed-corpus gate: fixed seed, bounded run count and
-      # per-unit timeout. Nonzero exit on any crash, leak, timeout or OOM.
-      - name: run seed corpus
-        run: nix develop --command ./build/fuzz/fuzz/fuzz_text fuzz/corpus -runs=1000000 -seed=42 -timeout=30
+      # Workflow app (see the workflows set in flake.nix): harness plus the
+      # deterministic seed-corpus gate.
+      - name: configure, build, run fuzz harness
+        run: nix run .#fuzz
 
   windows:
     runs-on: windows-2022
@@ -163,9 +141,4 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
       - name: clang-format check
-        run: >
-          nix develop --command clang-format --dry-run --Werror
-          ulid26/ulid26.hpp ulid26/value.hpp ulid26/generators.hpp ulid26/batch.hpp ulid26/ranges.hpp
-          test/value_test.cpp
-          bench/bench_bytes.cpp bench/bench_is_valid.cpp bench/bench_streams.cpp bench/bench_to_chars.cpp
-          fuzz/fuzz_text.cpp
+        run: nix run .#format

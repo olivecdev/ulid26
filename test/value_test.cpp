@@ -27,6 +27,7 @@
 #include <format>
 #include <functional>
 #include <iterator>
+#include <new>
 #include <span>
 #include <sstream>
 #include <streambuf>
@@ -312,6 +313,27 @@ namespace {
 
       protected:
         int_type overflow(int_type) override { return traits_type::eof(); }
+    };
+
+    // Allocator whose every allocation fails: the exception-safety probe for
+    // the allocating paths (to_string). Stateless, so equality is trivial.
+    template <typename T>
+    struct throwing_allocator {
+        using value_type = T;
+
+        throwing_allocator() = default;
+
+        template <typename U>
+        constexpr throwing_allocator(throwing_allocator<U> const&) noexcept {}
+
+        [[nodiscard]]
+        T* allocate(std::size_t) {
+            throw std::bad_alloc{};
+        }
+
+        void deallocate(T*, std::size_t) noexcept {}
+
+        friend constexpr bool operator==(throwing_allocator, throwing_allocator) noexcept = default;
     };
 
 } // namespace
@@ -613,6 +635,43 @@ int main() {
         expect(held) << "decode inverts encode on canonical soup";
     };
 
+    "to_string exception safety"_test = [] {
+#if defined(_MSC_VER) && defined(_DEBUG)
+// Skipped on MSVC-Debug while the headless-runner stall is root-caused:
+// Release and every other platform keep proving this path. An early return
+// would trip C4702 (unreachable code) under /W4 /WX, hence the empty branch
+// rather than a return.
+#else
+        // Allocation failure inside resize_and_overwrite must propagate
+        // through to_string's frame: this executes the unwind epilogue (the
+        // closing brace's landing pad, unreachable on any happy path) and
+        // proves the id is untouched — no partial spelling escapes.
+        auto const example = ulid26::try_parse(kExample);
+        expect(example.has_value()) << "example parses";
+        if (!example.has_value()) {
+            return;
+        }
+        // Manual try/catch rather than ut's throws<>: throws_ instantiates a
+        // return-false-after-expr() path that Release flow analysis proves
+        // unreachable for an always-throwing probe (C4702 under /W4 /WX, in
+        // the header itself). Runtime flags keep this to expect(bool),
+        // instantiated everywhere already.
+        ulid26::ulid const id             = example.value();
+        bool               threw_expected = false;
+        bool               threw_other    = false;
+        try {
+            static_cast<void>(
+                id.to_string<char, throwing_allocator<char>>(throwing_allocator<char>{})
+            );
+        } catch (std::bad_alloc const&) { threw_expected = true; } catch (...) {
+            threw_other = true;
+        }
+        expect(threw_expected) << "allocation failure propagates";
+        expect(!threw_other) << "no other exception escapes";
+        expect(id == example.value()) << "failed to_string leaves the id untouched";
+#endif
+    };
+
     "format vectors"_test = [] {
         expect(std::format("{}", ulid26::min()) == std::string{kNil}) << "nil formats";
         expect(std::format("{}", ulid26::max()) == std::string{kMax}) << "max formats";
@@ -848,6 +907,45 @@ int main() {
         expect(converted.category() == ulid26::ulid_category()) << "category pinned";
         expect(converted == ulid26::make_error_code(ulid26::errc::invalid_character))
             << "implicit conversion agrees";
+    };
+
+    "from_string errors"_test = [] {
+        // Every errc must surface through the error_code plumbing with a real
+        // message — never the unknown fallback. Wording stays unpinned; only
+        // the fallback is asserted. The three parse-domain conditions arrive
+        // via from_string; the two generator-domain ones (clock stepped back,
+        // entropy exhausted) cannot arise from parsing, so they go through
+        // make_error_code directly.
+        auto const known = [](std::error_code code) {
+            expect(code.category() == ulid26::ulid_category()) << "ulid category";
+            expect(code.message() != "ulid: unknown error") << "known message";
+        };
+        auto const bad_length = ulid26::ulid::from_string("short");
+        expect(
+            !bad_length.has_value() &&
+            bad_length.error() == ulid26::make_error_code(ulid26::errc::invalid_length)
+        ) << "short length maps to error_code";
+        if (!bad_length.has_value()) {
+            known(bad_length.error());
+        }
+        auto const bad_char = ulid26::ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FA*");
+        expect(
+            !bad_char.has_value() &&
+            bad_char.error() == ulid26::make_error_code(ulid26::errc::invalid_character)
+        ) << "invalid character maps to error_code";
+        if (!bad_char.has_value()) {
+            known(bad_char.error());
+        }
+        auto const overflow = ulid26::ulid::from_string("80000000000000000000000000");
+        expect(
+            !overflow.has_value() &&
+            overflow.error() == ulid26::make_error_code(ulid26::errc::overflow)
+        ) << "overflow maps to error_code";
+        if (!overflow.has_value()) {
+            known(overflow.error());
+        }
+        known(ulid26::make_error_code(ulid26::errc::time_reversed));
+        known(ulid26::make_error_code(ulid26::errc::generation_overflow));
     };
 
     "to_bytes vectors"_test = [] {

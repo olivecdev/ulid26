@@ -48,6 +48,24 @@ millisecond timestamp** and **80 bits of entropy** into 128 bits, canonically en
 | Dependencies | none |
 | Link model | header-only; single CMake target `olivec::ulid26`, all headers installed |
 
+## Development
+
+Every CI workflow is a flake app — the command below is exactly what CI runs, so local
+and remote never drift. Run from the repo root:
+
+| workflow | command | what it does |
+|---|---|---|
+| `ci` | `nix run .#ci` | Release configure, build, test, package |
+| `san` | `nix run .#san` | ASan/UBSan suite |
+| `tsan` | `nix run .#tsan` | TSan suite |
+| `cov` | `nix run .#cov` | gcov suite plus the Linux tracefile |
+| `merge` | `nix run .#merge` | merge tracefiles, 90% line gate, self-contained HTML report (needs both tracefiles; CI downloads them) |
+| `fuzz` | `nix run .#fuzz` | libFuzzer harness plus the deterministic seed-corpus gate |
+| `format` | `nix run .#format` | clang-format check over headers, test, benches and harness |
+| `bench` | `nix run .#bench` | Release benchmark matrix (ten repetitions, aggregates only; extra args forward to every suite; `ULID26_BENCH_CPU` pins CPUs, default 2, empty means unpinned) |
+
+`nix develop` drops into the interactive shell carrying the same toolchain.
+
 ## Quick start
 
 ### CMake with FetchContent
@@ -341,9 +359,8 @@ loop as `to_chars` (see Performance).
 
 Measured with the `bench/` suite (Google Benchmark, GCC 16, x86-64 Release;
 per-ULID times) on an Intel Core i5-8265U (Whiskey Lake, AVX2). Reproduce with
-`cmake --preset ci && cmake --build --preset ci-build`, then
-`./build/ci/bench/bench_batch`, `./build/ci/bench/bench_reference` and
-`./build/ci/bench/bench_ranges`.
+`nix run .#bench` (release matrix over `bench_is_valid`, `bench_to_chars`,
+`bench_bytes` and `bench_streams`).
 Timings are data-independent: the text kernels run the full pass with no
 early exit, so valid and malformed input cost the same.
 

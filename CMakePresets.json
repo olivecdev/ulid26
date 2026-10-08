@@ -86,6 +86,17 @@
       }
     },
     {
+      "name": "bench",
+      "displayName": "Benchmarks",
+      "description": "Release suite for the Google Benchmark binaries. Tests stay off: the bench binaries self-verify agreement, so ctest would only re-prove the build.",
+      "inherits": "base",
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ULID26_BUILD_TESTS": "OFF"
+      }
+    },
+    {
       "name": "prod",
       "displayName": "Production packaging",
       "description": "Release build for packagers (nix, debhelper). No extra flags: packagers inject their own. Pass --prefix at install time.",
@@ -115,6 +126,10 @@
     {
       "name": "cov-build",
       "configurePreset": "cov"
+    },
+    {
+      "name": "bench-build",
+      "configurePreset": "bench"
     },
     {
       "name": "fuzz-build",
@@ -216,6 +231,13 @@
         { "type": "configure", "name": "cov" },
         { "type": "build", "name": "cov-build" },
         { "type": "test", "name": "cov-test" }
+      ]
+    },
+    {
+      "name": "bench",
+      "steps": [
+        { "type": "configure", "name": "bench" },
+        { "type": "build", "name": "bench-build" }
       ]
     }
   ]
