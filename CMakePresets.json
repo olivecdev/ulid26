@@ -93,7 +93,8 @@
       "generator": "Ninja",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "ULID26_BUILD_TESTS": "OFF"
+        "ULID26_BUILD_TESTS": "OFF",
+        "ULID26_BUILD_BENCHMARKS": "ON"
       }
     },
     {

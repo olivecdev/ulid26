@@ -31,30 +31,31 @@ target_compile_options(ulid26_warnings INTERFACE
 
 # boost-ext/ut: single-header, macro-free test framework for the test
 # binaries (test-only dependency, never linked into the library itself).
-# The header is fully self-contained (no sibling includes), so it is
-# fetched lone via file(DOWNLOAD) instead of cloning the whole repo: one
-# 100 KB download instead of megabytes of history. Pinned twice: the URL
-# names the exact commit (tags can move, SHAs cannot) and EXPECTED_HASH
-# verifies the content (immune even to history rewrites). The download
-# dir derives from the pin, so changing UT_PIN can never go stale -- a
-# new pin simply downloads beside the old one.
-set(UT_PIN 18690cf86356ba4b0d535c95689fa3896bab3be1) # master @ "Preserve tags on parameterized tests"
-set(UT_HEADER_DIR "${CMAKE_BINARY_DIR}/_deps/ut-${UT_PIN}")
-set(UT_HEADER "${UT_HEADER_DIR}/boost/ut.hpp")
-if(NOT EXISTS "${UT_HEADER}")
-    file(
-        DOWNLOAD
-            https://raw.githubusercontent.com/boost-ext/ut/${UT_PIN}/include/boost/ut.hpp
-            "${UT_HEADER}"
-        EXPECTED_HASH SHA256=aef04d53cf8364646d68ff8fa94177a7bd5a16b708417dfe64f0418ba41f01ed
-        TLS_VERIFY ON
-        TIMEOUT 60
-    )
-endif()
-
-add_library(ut INTERFACE)
-target_include_directories(ut SYSTEM INTERFACE "${UT_HEADER_DIR}")
+# Discovery prefers a system copy — nixpkgs `ut` in our dev shell, Debian
+# libboost-ext-ut-dev, Conan boost-ext-ut — so offline packager builds test
+# with no network; otherwise the pinned release header below is fetched.
+# The header is fully self-contained (no sibling includes): one 100 KB
+# download, pinned twice — the URL names the exact release and EXPECTED_HASH
+# verifies the content. The download dir derives from the version, so bumps
+# can never go stale.
+find_package(ut QUIET)
 if(NOT TARGET Boost::ut)
+    set(UT_VERSION v2.3.1)
+    set(UT_HEADER_DIR "${CMAKE_BINARY_DIR}/_deps/ut-${UT_VERSION}")
+    set(UT_HEADER "${UT_HEADER_DIR}/boost/ut.hpp")
+    if(NOT EXISTS "${UT_HEADER}")
+        file(
+            DOWNLOAD
+                https://raw.githubusercontent.com/boost-ext/ut/${UT_VERSION}/include/boost/ut.hpp
+                "${UT_HEADER}"
+            EXPECTED_HASH SHA256=5be9e228ba9055917e5c98a042858ae624ca9285e985b8297bd3ac2e2e49967d
+            TLS_VERIFY ON
+            TIMEOUT 60
+        )
+    endif()
+
+    add_library(ut INTERFACE)
+    target_include_directories(ut SYSTEM INTERFACE "${UT_HEADER_DIR}")
     add_library(Boost::ut ALIAS ut)
 endif()
 

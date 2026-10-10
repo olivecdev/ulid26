@@ -11,6 +11,8 @@ header-only. Entropy engines may throw while acquiring OS entropy.
 C++23 | GCC 14+ | header-only | zero deps | constexpr | benchmarked
 ```
 
+> Part of the [olivec](https://olivec.dev) family of independent C++ libraries.
+
 ```cpp
 ulid26::ulid id = ulid26::generate();
 // 01ARZ3NDEKTSV4RRFFQ69G5FAV
@@ -46,7 +48,7 @@ millisecond timestamp** and **80 bits of entropy** into 128 bits, canonically en
 | Standard | C++23 (`-std=c++23`; MSVC maps it to `/std:c++latest`) |
 | Windows | `cmake -S . -B build/win -G "Visual Studio 17 2022" -A x64` (presets pin Ninja); `bench_reference` is excluded there — the reference needs `__int128` |
 | Dependencies | none |
-| Link model | header-only; single CMake target `olivec::ulid26`, all headers installed |
+| Link model | header-only; single CMake target `ulid26::ulid26`, all headers installed |
 
 ## Development
 
@@ -66,6 +68,11 @@ and remote never drift. Run from the repo root:
 
 `nix develop` drops into the interactive shell carrying the same toolchain.
 
+The test suite needs boost-ext/ut: `nix develop` provides it (nixpkgs `ut`);
+Debian trixie+ ships `libboost-ext-ut-dev`, Conan has `boost-ext-ut/2.3.1`.
+Otherwise the build downloads the pinned v2.3.1 header automatically
+(network required) — or pass `-DULID26_BUILD_TESTS=OFF` to skip the suite.
+
 ## Quick start
 
 ### CMake with FetchContent
@@ -79,7 +86,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(ulid26)
 
-target_link_libraries(myapp PRIVATE olivec::ulid26)
+target_link_libraries(myapp PRIVATE ulid26::ulid26)
 ```
 
 ### First ULID
@@ -466,7 +473,7 @@ ulid26/value.hpp             value layer: errors, scalar codec, ulid, parse, has
 ulid26/ulid26.hpp            generator umbrella over value.hpp: entropy engines, one-shot and
                              monotonic generation, bulk reservations
 ulid26/batch.hpp             batch text API (fixed/dynamic decode, encode, validation)
-ulid26/ranges.hpp            iterator adapter: generators as input_ranges (target olivec::ulid26::ranges)
+ulid26/ranges.hpp            iterator adapter: generators as input_ranges
 src/                             (nothing — header-only)
 test/                            constexpr, spec vectors, property, stress, batch differential
 bench/                           Google Benchmark suites (sweep + reference comparison)

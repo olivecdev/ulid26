@@ -50,24 +50,28 @@
         workflows = {
           ci = ''
             ${ccEnv}
+            ${cmakePackageEnv}
             # Release configure, build, test, package: mirrors production.
             set -euo pipefail
             cmake --workflow --preset ci
           '';
           san = ''
             ${ccEnv}
+            ${cmakePackageEnv}
             # Debug + ASan/UBSan suite (GCC/Clang only).
             set -euo pipefail
             cmake --workflow --preset san
           '';
           tsan = ''
             ${ccEnv}
+            ${cmakePackageEnv}
             # Debug + TSan suite (GCC/Clang only).
             set -euo pipefail
             cmake --workflow --preset tsan
           '';
           cov = ''
             ${ccEnv}
+            ${cmakePackageEnv}
             # Debug + gcov suite, then the Linux tracefile for the merge.
             set -euo pipefail
             cmake --workflow --preset cov
@@ -131,6 +135,15 @@
           export CC=gcc CXX=g++
         '';
 
+        # CMake packages from Nix (ut) are libraries, not tools: apps only
+        # put runtimeInputs on PATH, which find_package never searches. Export
+        # the prefix explicitly so `nix run` resolves system packages exactly
+        # like `nix develop` does — otherwise shell and apps would validate
+        # against different ut copies.
+        cmakePackageEnv = ''
+          export CMAKE_PREFIX_PATH="${pkgs.ut}''${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
+        '';
+
         mkWorkflow =
           name: text:
           pkgs.writeShellApplication {
@@ -157,13 +170,17 @@
               perf
             ]);
 
-          # Development and runtime libraries
+          # Development and runtime libraries: ut provides Boost::ut for the
+          # test suite via find_package, so nix builds test with no download.
           buildInputs = with pkgs; [
-            # none for now.
+            ut
           ];
 
+          # mkShell aggregates no CMAKE_PREFIX_PATH from inputs (verified
+          # empty), so export Nix-provided CMake packages explicitly — same
+          # as cmakePackageEnv does for the apps.
           shellHook = ''
-            export CPM_USE_LOCAL_PACKAGES=1
+            export CMAKE_PREFIX_PATH="${pkgs.ut}''${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
             echo "Welcome to the ulid26 development shell!"
           '';
         };
@@ -180,10 +197,6 @@
             git
             ninja
           ];
-
-          shellHook = ''
-            export CPM_USE_LOCAL_PACKAGES=1
-          '';
         };
       }
     );
