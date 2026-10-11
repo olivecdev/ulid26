@@ -57,13 +57,12 @@ and remote never drift. Run from the repo root:
 
 | workflow | command | what it does |
 |---|---|---|
-| `ci` | `nix run .#ci` | Release configure, build, test, package |
+| `ci` | `nix run .#ci` | clang-format gate, then Release configure, build, test, package |
 | `san` | `nix run .#san` | ASan/UBSan suite |
 | `tsan` | `nix run .#tsan` | TSan suite |
 | `cov` | `nix run .#cov` | gcov suite plus the Linux tracefile |
 | `merge` | `nix run .#merge` | merge tracefiles, 90% line gate, self-contained HTML report (needs both tracefiles; CI downloads them) |
 | `fuzz` | `nix run .#fuzz` | libFuzzer harness plus the deterministic seed-corpus gate |
-| `format` | `nix run .#format` | clang-format check over headers, test, benches and harness |
 | `bench` | `nix run .#bench` | Release benchmark matrix (ten repetitions, aggregates only; extra args forward to every suite; `ULID26_BENCH_CPU` pins CPUs, default 2, empty means unpinned) |
 
 `nix develop` drops into the interactive shell carrying the same toolchain.

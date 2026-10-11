@@ -41,7 +41,7 @@
         ];
 
         # One named workflow per CI job that runs under nix, plus bench:
-        #   nix run .#ci | .#san | .#tsan | .#cov | .#merge | .#fuzz | .#format | .#bench
+        #   nix run .#ci | .#san | .#tsan | .#cov | .#merge | .#fuzz | .#bench
         # Bodies are the exact commands CI used to spell out, so the local
         # invocation and the remote one are identical by construction — no
         # drift, no longhand. Apps execute in the invoking directory (the repo
@@ -51,8 +51,10 @@
           ci = ''
             ${ccEnv}
             ${cmakePackageEnv}
-            # Release configure, build, test, package: mirrors production.
+            # Style gate first: fail fast before compiling.
             set -euo pipefail
+            clang-format --dry-run --Werror ulid26/ulid26.hpp ulid26/value.hpp ulid26/generators.hpp ulid26/batch.hpp ulid26/ranges.hpp test/value_test.cpp bench/bench_bytes.cpp bench/bench_is_valid.cpp bench/bench_streams.cpp bench/bench_to_chars.cpp fuzz/fuzz_text.cpp
+            # Release configure, build, test, package: mirrors production.
             cmake --workflow --preset ci
           '';
           san = ''
@@ -95,11 +97,6 @@
             set -euo pipefail
             cmake --workflow --preset fuzz
             ./build/fuzz/fuzz/fuzz_text fuzz/corpus -runs=1000000 -seed=42 -timeout=30
-          '';
-          format = ''
-            # Style gate over the real tree (headers, test, benches, harness).
-            set -euo pipefail
-            clang-format --dry-run --Werror ulid26/ulid26.hpp ulid26/value.hpp ulid26/generators.hpp ulid26/batch.hpp ulid26/ranges.hpp test/value_test.cpp bench/bench_bytes.cpp bench/bench_is_valid.cpp bench/bench_streams.cpp bench/bench_to_chars.cpp fuzz/fuzz_text.cpp
           '';
           bench = ''
             ${ccEnv}
