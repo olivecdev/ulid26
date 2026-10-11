@@ -42,17 +42,15 @@ jobs:
       - uses: actions/checkout@v4
       # Release validation first: fast signal before the slow coverage half —
       # a red Release skips the Debug/OCC run below entirely.
-      - name: configure (MSVC, Release)
+      - name: configure (MSVC)
         run: cmake -S . -B build/win -G "Visual Studio 17 2022" -A x64
       - name: build (Release)
         run: cmake --build build/win --config Release
       - name: test (Release)
         run: ctest --test-dir build/win -C Release --output-on-failure
       # Debug: coverage wants full debug info and unsplit inline redundancies.
-      - name: configure (MSVC, Debug)
-        run: cmake -S . -B build/win-cov -G "Visual Studio 17 2022" -A x64
-      - name: build
-        run: cmake --build build/win-cov --config Debug
+      - name: build (Debug)
+        run: cmake --build build/win --config Debug
       - name: install OpenCppCoverage
         run: choco install opencppcoverage -y
       # cover_children: ctest spawns the test binaries, and those are what
@@ -73,7 +71,7 @@ jobs:
           & "C:\Program Files\OpenCppCoverage\OpenCppCoverage.exe" --sources "$env:GITHUB_WORKSPACE\ulid26" --cover_children
           --continue_after_cpp_exception
           --export_type cobertura:coverage-win.xml --
-          ctest --test-dir build/win-cov -C Debug --output-on-failure
+          ctest --test-dir build/win -C Debug --output-on-failure
       - name: upload tracefile
         uses: actions/upload-artifact@v4
         with:
@@ -114,3 +112,15 @@ jobs:
       # deterministic seed-corpus gate.
       - name: configure, build, run fuzz harness
         run: nix run .#fuzz
+
+  baseline:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: install baseline toolchain
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++-14
+      - name: configure, build, test, package on GCC 14
+        env:
+          CC: gcc-14
+          CXX: g++-14
+        run: cmake --workflow --preset ci

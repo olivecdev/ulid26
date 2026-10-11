@@ -44,7 +44,7 @@ millisecond timestamp** and **80 bits of entropy** into 128 bits, canonically en
 
 | | |
 |---|---|
-| Compilers | GCC 14+ (primary, incl. CAS tier; CI runs GCC 16) · Clang 22+ (mutex tier) · MSVC 19.36+ / VS 2022 17.6+ (CAS tier on x64, mutex elsewhere; Windows CI) · MinGW-w64 GCC 14+ (CAS tier expected; not run here) |
+| Compilers | GCC 14+ (primary, incl. CAS tier; CI runs GCC 16) · Clang 22+ (mutex tier) · MSVC 19.36+ / VS 2022 17.6+ (CAS tier on x64, mutex elsewhere; Windows CI) · MinGW-w64 GCC 14+ (CAS tier expected; not run here) · floor validated by the `ci` workflow on bare ubuntu-24.04 + GCC 14 (`baseline` job) |
 | Standard | C++23 (`-std=c++23`; MSVC maps it to `/std:c++latest`) |
 | Windows | `cmake -S . -B build/win -G "Visual Studio 17 2022" -A x64` (presets pin Ninja); `bench_reference` is excluded there — the reference needs `__int128` |
 | Dependencies | none |
