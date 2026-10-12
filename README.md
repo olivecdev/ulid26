@@ -52,8 +52,9 @@ millisecond timestamp** and **80 bits of entropy** into 128 bits, canonically en
 
 ## Development
 
-Every CI workflow is a flake app — the command below is exactly what CI runs, so local
-and remote never drift. Run from the repo root:
+CI workflows run through flake apps — the command below is exactly what CI runs, so
+local and remote never drift — except `baseline` (apt toolchain) and the coverage
+merge (pip gcovr), which need no Nix. Run from the repo root:
 
 | workflow | command | what it does |
 |---|---|---|
@@ -61,7 +62,6 @@ and remote never drift. Run from the repo root:
 | `san` | `nix run .#san` | ASan/UBSan suite |
 | `tsan` | `nix run .#tsan` | TSan suite |
 | `cov` | `nix run .#cov` | gcov suite plus the Linux tracefile |
-| `merge` | `nix run .#merge` | merge tracefiles, 90% line gate, self-contained HTML report (needs both tracefiles; CI downloads them) |
 | `fuzz` | `nix run .#fuzz` | libFuzzer harness plus the deterministic seed-corpus gate |
 | `bench` | `nix run .#bench` | Release benchmark matrix (ten repetitions, aggregates only; extra args forward to every suite; `ULID26_BENCH_CPU` pins CPUs, default 2, empty means unpinned) |
 

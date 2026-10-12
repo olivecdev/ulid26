@@ -83,18 +83,28 @@ jobs:
     needs: [coverage-linux, coverage-windows]
     steps:
       - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
       - name: download tracefiles
         uses: actions/download-artifact@v4
         with:
           pattern: coverage-*
           merge-multiple: true
-      # Workflow app (see the workflows set in flake.nix): normalize the
-      # Windows tracefile, merge, gate line coverage at 90, emit the
-      # self-contained HTML page. Rationale for each flag lives with the app.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: install gcovr
+        run: pip install --quiet "gcovr==8.4"
+      # Normalize the Windows tracefile (backslash paths, absolute source and
+      # filename prefixes), then merge, gate line coverage at 90, and emit one
+      # self-contained HTML page (static, no JS): with a bare --html-details
+      # prefix gcovr scatters siblings next to it and every link rots, while
+      # --html-single-page collapses all of it into the one uploaded file.
+      # Expects coverage-linux.json and coverage-win.xml in the working
+      # directory (downloaded above).
       - name: merge, gate, report
-        run: nix run .#merge
+        run: |
+          set -euo pipefail
+          sed -i 's|\\|/|g; s|<source>[^<]*</source>|<source>.</source>|g; s|filename="[^"]*/|filename="|g; s|filename="|filename="ulid26/|g' coverage-win.xml
+          gcovr --json-add-tracefile coverage-linux.json --cobertura-add-tracefile coverage-win.xml --root . --filter 'ulid26/.*' --print-summary --fail-under-line 90 --gcov-ignore-parse-errors negative_hits.warn_once_per_file --html-details --html-single-page static --output coverage-html.html
       - name: upload HTML report
         uses: actions/upload-artifact@v4
         with:

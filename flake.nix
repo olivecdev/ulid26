@@ -20,7 +20,7 @@
         # Toolchain shared by every workflow app below (and by the interactive
         # devShell): CMake + Ninja drive the presets, GCC builds/tests/covers/
         # sanitizes/benchmarks, Clang builds the libFuzzer harness,
-        # clang-format gates style, gcovr merges coverage, git serves
+        # clang-format gates style, gcovr covers the suite, git serves
         # FetchContent's git fetches, sed normalizes the Windows tracefile,
         # taskset pins benchmark CPUs. The raw compiler package rides last:
         # the gcc wrapper provides cc/c++/gcc/g++ but no gcov, and gcovr
@@ -41,7 +41,7 @@
         ];
 
         # One named workflow per CI job that runs under nix, plus bench:
-        #   nix run .#ci | .#san | .#tsan | .#cov | .#merge | .#fuzz | .#bench
+        #   nix run .#ci | .#san | .#tsan | .#cov | .#fuzz | .#bench
         # Bodies are the exact commands CI used to spell out, so the local
         # invocation and the remote one are identical by construction — no
         # drift, no longhand. Apps execute in the invoking directory (the repo
@@ -79,17 +79,7 @@
             cmake --workflow --preset cov
             gcovr --root . --object-directory build/cov --filter 'ulid26/.*' --json -o coverage-linux.json
           '';
-          merge = ''
-            # Merge the Linux + Windows tracefiles, gate line coverage at 90,
-            # and emit one self-contained HTML page (static, no JS): with a
-            # bare --html-details prefix gcovr scatters siblings next to it
-            # and every link rots, while --html-single-page collapses all of
-            # it into the one uploaded file. Expects coverage-linux.json and
-            # coverage-win.xml in the invoking directory (CI downloads both).
-            set -euo pipefail
-            sed -i 's|\\|/|g; s|<source>[^<]*</source>|<source>.</source>|g; s|filename="[^"]*/|filename="|g; s|filename="|filename="ulid26/|g' coverage-win.xml
-            gcovr --json-add-tracefile coverage-linux.json --cobertura-add-tracefile coverage-win.xml --root . --filter 'ulid26/.*' --print-summary --fail-under-line 90 --gcov-ignore-parse-errors negative_hits.warn_once_per_file --html-details --html-single-page static --output coverage-html.html
-          '';
+
           fuzz = ''
             # Clang + libFuzzer harness over the text codec, then the
             # deterministic seed-corpus gate: fixed seed, bounded runs,
@@ -127,7 +117,7 @@
         # generic cc/c++ names. That silently retargets GCC-tuned builds and
         # breaks gcov (LLVM notes under GNU gcov). Pin GCC for every app that
         # compiles, so fresh configures resolve identically everywhere. fuzz
-        # pins clang++ in its preset instead; format/merge compile nothing.
+        # pins clang++ in its preset instead.
         ccEnv = ''
           export CC=gcc CXX=g++
         '';

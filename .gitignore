@@ -3,7 +3,7 @@ build/
 .build/
 deps/
 .deps/
-# CI tracefiles and reports: nix run .#cov/.#merge produce these beside the
+# CI tracefiles and reports: the coverage jobs produce these beside the
 # tree, exactly as the CI jobs do; they are artifacts, never sources.
 coverage-linux.json
 coverage-win.xml
