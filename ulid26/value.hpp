@@ -387,14 +387,11 @@ namespace ulid26 {
         [[nodiscard]]
         constexpr std::expected<std::array<char, ulid::kTextSize>, errc>
         try_narrowing_assume_length(std::basic_string_view<CharT> text) noexcept {
-            // static_assert(
-            //     not std::is_same_v<CharT, char>,
-            //     "do not apply try_narrowing to char, use is_valid directly"
-            // );
+            static_assert(not std::is_same_v<CharT, char>, "do not apply try_narrowing to char");
             std::array<char, ulid::kTextSize> result{};
-            static constexpr auto             kMaxChar = static_cast<CharT>(kAsciiMax);
+            static constexpr auto kMaxChar = static_cast<std::make_unsigned_t<CharT>>(kAsciiMax);
             for (std::size_t i = 0; i < result.size(); ++i) {
-                if (text[i] > kMaxChar) {
+                if (static_cast<std::make_unsigned_t<CharT>>(text[i]) > kMaxChar) {
                     return std::unexpected(errc::invalid_character);
                 }
                 result[i] = static_cast<char>(text[i]);

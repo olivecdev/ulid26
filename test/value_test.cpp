@@ -353,6 +353,11 @@ int main() {
             << "is_valid<wchar_t> accepts";
         expect(!ulid26::is_valid(std::wstring_view{L"01ARZ3NDEKTSV4RRFFQ69G5FA\u00E9"}))
             << "is_valid<wchar_t> rejects non-ASCII";
+        std::wstring invalid_neg{L"01ARZ3NDEKTSV4RRFFQ69G5FAV"};
+        // A negative value that if truncated my look like a valid 0.
+        invalid_neg[0] = static_cast<wchar_t>(-208);
+        std::wstring_view inv{invalid_neg};
+        expect(!ulid26::is_valid(inv)) << "is_valid<wchar_t> rejects negative values";
         // Every character type validates through the same narrow anchor:
         // ASCII but non-alphabet units still reject (not just non-ASCII).
         expect(ulid26::is_valid(std::u8string_view{u8"01ARZ3NDEKTSV4RRFFQ69G5FAV"}))
