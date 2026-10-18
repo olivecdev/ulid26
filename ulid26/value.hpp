@@ -71,7 +71,9 @@ namespace ulid26 {
     // A concept to detect that a specific type is treated by the standard library as a character
     // type, i.e. has a specialization of std::char_traits.
     template <typename CharT>
-    concept std_char = requires { typename std::char_traits<CharT>::char_type; };
+    concept std_char =
+        std::same_as<CharT, char> || std::same_as<CharT, wchar_t> || std::same_as<CharT, char8_t> ||
+        std::same_as<CharT, char16_t> || std::same_as<CharT, char32_t>;
     // An output iterator writable with CharT units. Guarantees *it++ = unit (required by
     // std::output_iterator itself), never capacity: 26 writable slots stay a documented
     // precondition, exactly like std::copy_n.
@@ -138,9 +140,10 @@ namespace ulid26 {
 
         /// Binary serialization API: 16 bytes in big-endian order, any 16-bytes value is inherently
         /// a valid ULID, thus the API is infallible.
-        template <std_byte ByteT>
+        template <typename ByteT>
+            requires std_byte<std::remove_const_t<ByteT>>
         [[nodiscard]]
-        static constexpr ulid from_bytes(std::span<ByteT const, kBinarySize> bytes) noexcept;
+        static constexpr ulid from_bytes(std::span<ByteT, kBinarySize> bytes) noexcept;
         template <std_byte ByteT>
         constexpr void to_bytes(std::span<ByteT, kBinarySize> bytes) const noexcept;
 
@@ -604,9 +607,10 @@ namespace ulid26 {
         return static_cast<std::size_t>(folded);
     }
 
-    template <std_byte ByteT>
+    template <typename ByteT>
+        requires std_byte<std::remove_const_t<ByteT>>
     [[nodiscard]]
-    constexpr ulid ulid::from_bytes(std::span<ByteT const, kBinarySize> bytes) noexcept {
+    constexpr ulid ulid::from_bytes(std::span<ByteT, kBinarySize> bytes) noexcept {
         auto get_uint64 = [](std::span<ByteT const, detail::kHalfLength> octets) -> std::uint64_t {
             return std::accumulate(
                 octets.begin(), octets.end(), std::uint64_t{0}, [](std::uint64_t acc, ByteT elem) {
