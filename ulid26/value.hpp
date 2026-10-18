@@ -18,7 +18,9 @@
 // that only name, parse or format ids skip the generator templates entirely.
 #include <algorithm>
 #include <array>
+#include <compare>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <format>
@@ -29,8 +31,11 @@
 #include <memory>
 #include <numeric>
 #include <span>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
+#include <type_traits>
 
 namespace ulid26 {
     // A Universally Unique Lexicographically Sortable Identifier (ULID): a 48-bit millisecond
