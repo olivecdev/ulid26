@@ -65,7 +65,8 @@ namespace ulid26 {
     // stay bytes, and no overload set ever confuses the two domains.
     template <typename ByteT>
     concept std_byte = std::same_as<ByteT, std::byte> ||
-                       (std::integral<ByteT> && sizeof(ByteT) == 1 && !std::same_as<ByteT, bool>);
+                       (std::integral<ByteT> && sizeof(ByteT) == 1 && !std::same_as<ByteT, bool> &&
+                        !std::same_as<ByteT, char8_t>);
 
     // A concept to detect that a specific type is treated by the standard library as a character
     // type, i.e. has a specialization of std::char_traits.
