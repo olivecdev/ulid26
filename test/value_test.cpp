@@ -674,6 +674,9 @@ int main() {
 
     "format vectors"_test = [] {
         expect(std::format("{}", ulid26::min()) == std::string{kNil}) << "nil formats";
+        constexpr std::wstring_view kWideNil = L"00000000000000000000000000";
+        expect(std::format(L"{}", ulid26::min()) == kWideNil)
+            << "nil formats to wide strings as well";
         expect(std::format("{}", ulid26::max()) == std::string{kMax}) << "max formats";
         auto const example = ulid26::try_parse(kExample);
         expect(example.has_value()) << "example parses";
