@@ -165,8 +165,9 @@ namespace ulid26 {
         [[nodiscard]]
         static constexpr std::size_t hash_value(ulid value) noexcept;
 
-        /// An attorney to gate unsafe APIs so we don't totally expose them nor grant full
-        /// friendship to helpers like the custom std::formatter.
+        /// Gated home of the unchecked encoding/decoding cores: operations whose preconditions
+        /// (26 writable slots, 26 characters) the caller must establish. Not exposed, nor are the
+        /// helpers that use them granted full friendship with the value type.
         template <std_char CharT>
         class unsafe {
             // This would be impossible without the templated attorney or passkey idioms: a partial
@@ -175,21 +176,26 @@ namespace ulid26 {
             friend class std::formatter<ulid, CharT>;
             friend constexpr std::expected<ulid, errc>
             try_parse<>(std::basic_string_view<CharT> text) noexcept;
+            // The enclosing value type itself: to_chars delegates to the unchecked
+            // fill (the span extent is the check). External access stays gated above.
+            friend class ulid;
 
-            // The façade this attorney bridges to the private implementation: iterator based APIs
-            // that cannot or do not validate storage size.
+            // The unchecked cores live here, not as private members: anything that
+            // cannot or does not validate storage size is textually bounded by this
+            // class and reachable only through its friends. Defined out of line
+            // below (past namespace detail, which the cores read).
             template <typename IterT>
                 requires char_sink<IterT, CharT>
             [[nodiscard]]
-            static constexpr IterT to_chars_unchecked(ulid value, IterT slot) noexcept {
-                return value.to_chars_unchecked<CharT>(slot);
-            }
+            static constexpr IterT to_chars_unchecked(ulid value, IterT slot) noexcept;
 
+            // Unchecked decode core: precondition text.size() == kTextSize (established
+            // by try_parse below; narrowing re-checks length for wide input). Returns
+            // the value instead of mutating through a reference, so a failed parse
+            // leaves no half-written object behind.
             [[nodiscard]]
-            static constexpr errc
-            try_parse_unchecked(ulid& value, std::basic_string_view<CharT> text) noexcept {
-                return value.try_parse_unchecked<CharT>(text);
-            }
+            static constexpr std::expected<ulid, errc>
+            try_parse_unchecked(std::basic_string_view<CharT> text) noexcept;
         };
 
       private:
@@ -204,29 +210,10 @@ namespace ulid26 {
         // NOLINTNEXTLINE(*-swappable-parameters).
         constexpr ulid(std::uint64_t hi, std::uint64_t low) noexcept : hi_{hi}, low_{low} {}
 
-        // Outputs into a sink iterator. Precondition: the sink must have at least 26 writable
-        // slots, otherwise the behavior is undefined. This precondition is not verifiable in this
-        // function. Given the ease of misuse, it's gated under the passkey<CharT>.
-        template <std_char CharT, typename IterT>
-            requires char_sink<IterT, CharT>
-        [[nodiscard]]
-        constexpr IterT to_chars_unchecked(IterT slot) const noexcept;
-
-        // Fallible mutator for the constexpr domain: returns an error condition if the parse failed
-        // without mutating *this, performing full validation while parsing, except input length.
-        // Precondition: text.size() == kTextSize, otherwise the behavior is undefined. Given the
-        // ease of misuse, it's gated under the passkey<CharT>.
-        template <std_char CharT>
-        [[nodiscard]]
-        constexpr errc try_parse_unchecked(std::basic_string_view<CharT> text) noexcept;
-
         /// Friends
         friend constexpr ulid max() noexcept;
 
         friend constexpr ulid min() noexcept;
-
-        // literal suffix operator needs friendship.
-        friend consteval ulid literals::operator""_ulid(char const* text, std::size_t size);
 
         /// Interoperability with the standard library: stream operators for text I/O.
         template <std_char CharT, typename Traits = std::char_traits<CharT>>
@@ -253,11 +240,12 @@ namespace ulid26 {
             if (!in.read(chars.data(), static_cast<std::streamsize>(ulid::kTextSize))) {
                 return in; // read() already set failbit (and eofbit at end of input)
             }
-            auto const err = value.try_parse_unchecked<CharT>(
-                std::basic_string_view<CharT>{chars.data(), chars.size()}
-            );
-            if (err != errc{}) {
+            auto const parsed =
+                try_parse(std::basic_string_view<CharT>{chars.data(), chars.size()});
+            if (!parsed) {
                 in.setstate(std::ios_base::failbit);
+            } else {
+                value = *parsed;
             }
             return in;
         }
@@ -442,63 +430,55 @@ namespace ulid26 {
         return is_valid(std::basic_string_view<CharT>{text, N - 1});
     }
 
-    template <>
-    [[nodiscard]]
-    constexpr errc ulid::try_parse_unchecked(std::basic_string_view<char> text) noexcept {
-        using namespace detail;
-        std::uint64_t bad  = 0;
-        auto          fold = [&bad](std::uint64_t acc, char elem) -> std::uint64_t {
-            std::uint64_t const value = kDecode[static_cast<std::uint8_t>(elem)];
-            bad                       = bad | value;                    // carry validity channel
-            return (acc << kBitsPerChar) | (value & kValueChannelMask); // value channel
-        };
-
-        std::string_view tstamp = text.substr(0, kTimestampChars);
-        std::uint64_t    timestamp =
-            std::accumulate(tstamp.begin(), tstamp.end(), std::uint64_t{0}, fold);
-
-        std::string_view entropy_h = text.substr(kTimestampChars, kEntropyHiGroups);
-        std::uint64_t    entropy_high =
-            std::accumulate(entropy_h.begin(), entropy_h.end(), std::uint64_t{0}, fold);
-
-        std::uint64_t const straddle_value =
-            kDecode[static_cast<std::uint8_t>(text[kEntropySplitIndex])];
-        if ((straddle_value & kErrorChannelMask) != 0) {
-            return errc::invalid_character;
-        }
-        entropy_high = (entropy_high << 1U) | (straddle_value >> kStraddleShift);
-
-        std::string_view entropy_l = text.substr(kEntropySplitIndex + 1);
-        std::uint64_t    entropy_low =
-            std::accumulate(entropy_l.begin(), entropy_l.end(), straddle_value & kLowNibble, fold);
-
-        if ((bad & kErrorChannelMask) != 0) {
-            return errc::invalid_character;
-        }
-        if (text[0] > kMaxFirstCharValue) {
-            return errc::overflow;
-        }
-        // The actual state is only ever touched if the parse succeeded, so the object remains
-        // unchanged on error.
-        hi_  = (timestamp << kTimestampShift) | entropy_high;
-        low_ = entropy_low;
-        return errc{};
-    }
-
     template <std_char CharT>
     [[nodiscard]]
-    constexpr errc ulid::try_parse_unchecked(std::basic_string_view<CharT> text) noexcept {
-        static_assert(
-            not std::is_same_v<CharT, char>,
-            "do not apply try_parse to char, use the char overload directly"
-        );
-        auto const narrow = detail::try_narrowing_assume_length(text);
-        if (!narrow) {
-            return narrow.error();
+    constexpr std::expected<ulid, errc>
+    ulid::unsafe<CharT>::try_parse_unchecked(std::basic_string_view<CharT> text) noexcept {
+        if constexpr (std::is_same_v<CharT, char>) {
+            using namespace detail;
+            std::uint64_t bad  = 0;
+            auto          fold = [&bad](std::uint64_t acc, char elem) -> std::uint64_t {
+                std::uint64_t const value = kDecode[static_cast<std::uint8_t>(elem)];
+                bad                       = bad | value; // carry validity channel
+                return (acc << kBitsPerChar) | (value & kValueChannelMask); // value channel
+            };
+
+            std::string_view tstamp = text.substr(0, kTimestampChars);
+            std::uint64_t    timestamp =
+                std::accumulate(tstamp.begin(), tstamp.end(), std::uint64_t{0}, fold);
+
+            std::string_view entropy_h = text.substr(kTimestampChars, kEntropyHiGroups);
+            std::uint64_t    entropy_high =
+                std::accumulate(entropy_h.begin(), entropy_h.end(), std::uint64_t{0}, fold);
+
+            std::uint64_t const straddle_value =
+                kDecode[static_cast<std::uint8_t>(text[kEntropySplitIndex])];
+            if ((straddle_value & kErrorChannelMask) != 0) {
+                return std::unexpected(errc::invalid_character);
+            }
+            entropy_high = (entropy_high << 1U) | (straddle_value >> kStraddleShift);
+
+            std::string_view entropy_l   = text.substr(kEntropySplitIndex + 1);
+            std::uint64_t    entropy_low = std::accumulate(
+                entropy_l.begin(), entropy_l.end(), straddle_value & kLowNibble, fold
+            );
+
+            if ((bad & kErrorChannelMask) != 0) {
+                return std::unexpected(errc::invalid_character);
+            }
+            if (text[0] > kMaxFirstCharValue) {
+                return std::unexpected(errc::overflow);
+            }
+            return ulid{(timestamp << kTimestampShift) | entropy_high, entropy_low};
+        } else {
+            auto const narrow = detail::try_narrowing_assume_length(text);
+            if (!narrow) {
+                return std::unexpected(narrow.error());
+            }
+            return ulid::unsafe<char>::try_parse_unchecked(
+                std::string_view{narrow->data(), narrow->size()}
+            );
         }
-        return try_parse_unchecked<char>(
-            std::basic_string_view<char>{narrow->data(), narrow->size()}
-        );
     }
 
     constexpr std::uint64_t ulid::timestamp() const noexcept {
@@ -506,7 +486,6 @@ namespace ulid26 {
     }
 
     namespace literals {
-
         // Compile-time-checked literal for test vectors and sentinels:
         // invalid text fails the build at the literal, so constants spell
         // themselves (using namespace ulid26::literals to opt in).
@@ -515,14 +494,13 @@ namespace ulid26 {
             if (size != ulid::kTextSize) {
                 throw std::runtime_error("ulid: literal must be exactly 26 characters long");
             }
-            ulid       result{};
-            auto const err = result.try_parse_unchecked(std::string_view{text, size});
-            if (err != errc{}) {
+            auto const parsed = try_parse(std::string_view{text, size});
+            if (!parsed) {
                 throw std::runtime_error(
                     "ulid: literal does not conform to the Crockford base32 alphabet"
                 );
             }
-            return result;
+            return *parsed;
         }
 
     } // namespace literals
@@ -530,16 +508,10 @@ namespace ulid26 {
     template <std_char CharT>
     [[nodiscard]]
     constexpr std::expected<ulid, errc> try_parse(std::basic_string_view<CharT> text) noexcept {
-        std::expected<ulid, errc> result{};
         if (text.size() != ulid::kTextSize) {
-            result = std::unexpected(errc::invalid_length);
-            return result;
+            return std::unexpected(errc::invalid_length);
         }
-        auto err = ulid::unsafe<CharT>::try_parse_unchecked(*result, text);
-        if (err != errc{}) {
-            result = std::unexpected(err);
-        }
-        return result;
+        return ulid::unsafe<CharT>::try_parse_unchecked(text);
     }
 
     template <std_char CharT, std::size_t N>
@@ -556,39 +528,40 @@ namespace ulid26 {
         return ulid26::try_parse<CharT>(text).transform_error(make_error_code);
     }
 
-    template <std_char CharT, typename IterT>
+    template <std_char CharT>
+    template <typename IterT>
         requires char_sink<IterT, CharT>
     [[nodiscard]]
-    constexpr IterT ulid::to_chars_unchecked(IterT slot) const noexcept {
-        // NOLINTNEXTLINE(bugprone-easily-swappable-parameters): local private helper.
-        auto encode = [&slot](std::uint64_t value, std::size_t shift, std::size_t boundary) {
+    constexpr IterT ulid::unsafe<CharT>::to_chars_unchecked(ulid value, IterT slot) noexcept {
+        // NOLINTNEXTLINE(bugprone-easily-swappable-parameters): local helper.
+        auto encode = [&slot](std::uint64_t part, std::size_t shift, std::size_t boundary) {
             for (std::size_t i = 0; i < boundary; ++i) {
-                auto const index  = static_cast<std::uint8_t>((value >> shift) & detail::kCharMask);
+                auto const index  = static_cast<std::uint8_t>((part >> shift) & detail::kCharMask);
                 *slot++           = static_cast<CharT>(detail::kCrockfordAlphabet[index]);
                 shift            -= detail::kBitsPerChar;
             }
         };
 
-        encode(timestamp(), detail::kFirstTimestampShift, detail::kTimestampChars);
+        encode(value.timestamp(), detail::kFirstTimestampShift, detail::kTimestampChars);
 
-        std::uint64_t const entropy_hi = hi_ & detail::kEntropyHighMask;
+        std::uint64_t const entropy_hi = value.hi_ & detail::kEntropyHighMask;
         encode(entropy_hi, detail::kEntropyHiTop, detail::kEntropyHiGroups);
 
         auto const straddle = static_cast<std::uint32_t>(
             ((entropy_hi & 1U) << detail::kStraddleShift) |
-            ((low_ >> detail::kLoTopShift) & detail::kLowNibble)
+            ((value.low_ >> detail::kLoTopShift) & detail::kLowNibble)
         );
         *slot++ = static_cast<CharT>(detail::kCrockfordAlphabet[straddle]);
 
-        encode(low_, detail::kLoGroupBase, detail::kEntropyLoGroups);
+        encode(value.low_, detail::kLoGroupBase, detail::kEntropyLoGroups);
         return slot;
     }
 
     template <std_char CharT>
     constexpr void ulid::to_chars(std::span<CharT, ulid::kTextSize> out) const noexcept {
-        // Compile-time checked that out has exactly 26 writable slots.
+        // The span extent is the check; the fill itself is the unchecked core.
         [[maybe_unused]]
-        auto iter = to_chars_unchecked<CharT>(out.begin());
+        auto iter = unsafe<CharT>::to_chars_unchecked(*this, out.begin());
     }
 
     [[nodiscard]]
