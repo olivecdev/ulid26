@@ -63,3 +63,7 @@ add_executable(ulid26_value_test value_test.cpp)
 target_link_libraries(ulid26_value_test PRIVATE ulid26_warnings ulid26 Boost::ut)
 add_test(NAME ulid26_value_test COMMAND ulid26_value_test)
 
+add_executable(ulid26_generate_test generate_test.cpp)
+target_link_libraries(ulid26_generate_test PRIVATE ulid26_warnings ulid26 Boost::ut)
+add_test(NAME ulid26_generate_test COMMAND ulid26_generate_test)
+

@@ -53,7 +53,7 @@
             ${cmakePackageEnv}
             # Style gate first: fail fast before compiling.
             set -euo pipefail
-            clang-format --dry-run --Werror ulid26/ulid26.hpp ulid26/value.hpp ulid26/generators.hpp ulid26/batch.hpp ulid26/ranges.hpp test/value_test.cpp bench/bench_bytes.cpp bench/bench_is_valid.cpp bench/bench_streams.cpp bench/bench_to_chars.cpp fuzz/fuzz_text.cpp
+            clang-format --dry-run --Werror ulid26/ulid26.hpp ulid26/value.hpp ulid26/generators.hpp test/value_test.cpp test/generate_test.cpp bench/bench_bytes.cpp bench/bench_is_valid.cpp bench/bench_streams.cpp bench/bench_to_chars.cpp fuzz/fuzz_text.cpp
             # Release configure, build, test, package: mirrors production.
             cmake --workflow --preset ci
           '';

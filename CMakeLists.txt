@@ -34,9 +34,7 @@ target_sources(ulid26
     INTERFACE FILE_SET HEADERS
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
     FILES
-        ulid26/batch.hpp
         ulid26/generators.hpp
-        ulid26/ranges.hpp
         ulid26/ulid26.hpp
         ulid26/value.hpp
 )

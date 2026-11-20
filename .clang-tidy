@@ -55,7 +55,7 @@ CheckOptions:
 
   readability-identifier-naming.EnumCase: lower_case
   # This library's public API is std-styled by design (ulid, errc,
-  # monotonic_local, ...), so classes/structs/enums are lower_case here.
+  # unsynchronized_generator, ...), so classes/structs/enums are lower_case here.
   # Regular constants keep the house style below.
   readability-identifier-naming.ClassCase: lower_case
   readability-identifier-naming.StructCase: lower_case

@@ -4,7 +4,7 @@
 
 A spec-exact, thread-safe, constexpr-friendly implementation of the 
 [ULID specification](https://github.com/ulid/spec) — the 26-character sort key — with
-`std::expected`/`std::error_code` error handling for fallible value and batch APIs, no dependencies,
+`std::expected`/`std::error_code` error handling for fallible value APIs, no dependencies,
 header-only. Entropy engines may throw while acquiring OS entropy.
 
 ```
@@ -93,14 +93,10 @@ target_link_libraries(myapp PRIVATE ulid26::ulid26)
 ```cpp
 #include <ulid26/ulid26.hpp>
 #include <print>
-#Include <iostream>
 
 int main() {
     auto id = ulid26::generate();          // thread-safe one-shot
-    std::println("{}", id);                        // std::formatter prints canonical text
-    // alternatively, with the old iostreams API:
-    auto s  = id.to_string();                      // std::array<char, 26>, purposefully NOT NULL-terminated
-    std::cout << std::string_view{s.data(), s.size()} << '\n';
+    std::println("{}", id);                // std::formatter prints canonical text
 }
 ```
 
@@ -140,7 +136,7 @@ public:
 
 Default construction produces the nil value — compare with `u == ulid26::ulid{}`.
 
-The value type, scalar codec and batch validation helpers are `constexpr`: the library ships
+The value type and scalar codec are `constexpr`: the library ships
 `static_assert`-driven specification tests, including round-trip proofs and malformed-input
 rejection, evaluated at compile time. The public `from_string`/`from_bytes` wrap the scalar core to
 produce `std::error_code`, which is not constexpr-constructible, so the compile-time entries are
@@ -160,8 +156,9 @@ static_assert(ulid26::parse("80000000000000000000000000").error() == ulid26::err
 
 Failures use the standard error-code machinery (`std::errc`-style):
 
-- fallible value-producing APIs (sources) return `std::expected<T, std::error_code>` and;
-- sinks that fill user-provided storage return `std::error_code` directly - falsy on success.
+- fallible operations return `std::expected<T, std::error_code>`;
+- reservations are best-effort: a short or empty `reservation` is success and reports its capacity
+  through `size()`, not through an error.
 
 The library itself doesn't throw exceptions, but stdlib APIs might do it under our feet. Also,
 entropy acquisition may throw if the operating system cannot provide entropy.
@@ -184,58 +181,76 @@ Entropy-source failures are construction or draw failures and are propagated as 
 
 ## Generation
 
+`generate()` mints exactly one id: one fresh clock read and one fresh entropy draw, with no state.
+It is safe from any thread. Do not call it in a loop; for more than one id, take a reservation from
+a generator.
+
 ```cpp
-// One-shot: fresh timestamp + fresh entropy. Safe to call from any thread.
-auto id = ulid26::generate();
+ulid26::ulid id = ulid26::generate();
 
 // Same, with an explicit engine (see Custom entropy engines below).
-auto oid = ulid26::generate<ulid26::system_rng>();
+ulid26::ulid other = ulid26::generate<ulid26::system_rng>();
 ```
 
-### Monotonic generation
+### Monotonic generators
 
 When several ULIDs are produced within the same millisecond, the monotonic generators increment the
 previous entropy by one instead of drawing fresh randomness, guaranteeing strictly increasing
-output and much faster generation. The monotonic generators are stateful and have two flavors:
+output. There are two flavors:
 
 ```cpp
-// Per-generator instance state: zero synchronization, strictly increasing per thread. Use it when
-// ulid generation happens via a single object never shared across threads.
-ulid26::unsynchronized_generator m();
-auto a = m();    // -> std::expected<ulid, std::error_code>
-auto b = m();    // b > a whenever the clock confirms the same or later millisecond
+// Per-object state: zero synchronization, strictly increasing per instance. Use it when generation
+// happens via a single object never shared across threads.
+ulid26::unsynchronized_generator m;
+auto a = m.next();    // -> std::expected<ulid, std::error_code>
+auto b = m.next();    // b > a whenever the clock confirms the same or later millisecond
 
-// A local generator owns the engine passed at construction. A seeded engine makes the entropy
-// stream deterministic.
+// A generator owns the engine passed at construction. A seeded engine makes the entropy stream
+// deterministic.
 ulid26::unsynchronized_generator<ulid26::default_rng> seeded{ulid26::default_rng{42}};
 
-// Shared, all instances refer to the same global atomic state: strictly increasing across ALL threads.
-// Safer but less performant. Use it when you're unsure about which thread will generate the next ULID.
+// Shared: all instances refer to the same global atomic state per engine type, so the sequence is
+// strictly increasing across ALL threads. Use it when you're unsure which thread generates next.
 ulid26::shared_generator g;
-auto c = g();
+auto c = g.next();
 ```
 
-### Bulk reservations
+Both flavors expose `next()` for a single id and `reserve(count)` for bulk. Prefer `reserve()` for
+anything beyond one id: it reduces the committing synchronization to one event per block and gives
+you a local range to drain without further calls.
 
-High-ingestion pipelines can reserve blocks of ids at once, reducing the committing synchronization
-to one event per block. A successful reservation behaves exactly **as if** all its ids were created
-within the same millisecond — strictly increasing under one timestamp:
+### Reservations
+
+A reservation is an immutable, copyable, random-access range of `ulid`. It fixes one millisecond
+timestamp and a contiguous entropy window; iteration computes values on demand, so it is pure and
+repeatable. It models a `std::ranges::view`, so it composes with the standard pipeline:
 
 ```cpp
 ulid26::shared_generator g;
-auto r = g.next(64);   // bulk next(): 64 ids, all strictly after everything ever issued
-// ids handed out locally; emission order may invert within the reserved window
+auto r = g.reserve(64);    // -> std::expected<reservation, std::error_code>
+if (!r)
+    return r.error();
+
+for (auto id : *r)                              // range-for
+    consume(id);
+
+for (auto id : *r | std::views::take(10))       // views pipeline
+    consume(id);
+
+auto ids = *r | std::views::transform(...) | std::ranges::to<std::vector>();
 ```
 
-The range never spans milliseconds and never partially fills: a count that
-does not fit the remainder of the current millisecond fails closed with
-`errc::generation_overflow`, leaving generator state untouched.
+A reservation never spans milliseconds and is always exactly the size reported by `size()`.
+`reserve(count)` is best-effort: it grants between 0 and `count` ids from the remainder of the
+current millisecond, and a short or empty result is success, not an error. Capacity is *reported*
+by the range, never by an oversized error; `generation_overflow` belongs to single-value `next()`
+only. Copying or iterating a reservation never mints new ids: call `reserve()` again for a new
+block.
 
-Even if two threads call `next(64)` in the same millisecond, we guarantee that the two blocks are
-disjoint and strictly increasing across threads. The shared state stores the last ULID of the
-reserved block, not the first: once a thread succeeds in reserving a block, the next thread sees a
-strictly higher last ULID and cannot overlap. The atomic (or mutex-based) protocol ensures no thread
-can observe a partial or outdated state.
+Even if two threads reserve in the same millisecond, the blocks are disjoint and ordered across
+threads. The shared state stores the last ULID of the reserved block, not the first: once a thread
+succeeds in reserving a block, the next thread sees a strictly higher last ULID and cannot overlap.
+The atomic (or mutex-based) protocol ensures no thread can observe a partial or outdated state.
 
 ### Custom entropy engines
 
@@ -250,12 +265,12 @@ The in-house engines are `default_rng` (`ChaCha20`, seeded once per thread from 
 draw) and `system_rng` (`std::random_device` per draw; ~5µs, but OS-maintained and fork-safe). Two
 warnings travel with the freedom: non-cryptographic engines (`mt19937_64`, and Philox — available as
 `std::philox4x32` only under C++26) must never back ids that need unguessability, and an engine with
-a fixed default seed yields identical streams on every thread under `monotonic_shared` (uniqueness
+a fixed default seed yields identical streams on every thread under `shared_generator` (uniqueness
 still holds — the shared counter sequences collisions — but the entropy correlates).
 
-`monotonic_local` is non-copyable. Moving transfers the sequence and retires the source object: the
-moved-from generator is reset and starts a fresh, re-seeded sequence if used again.
-`monotonic_shared` is neither copyable nor movable; share it by reference.
+`unsynchronized_generator` is non-copyable. Moving transfers the sequence and retires the source
+object: the moved-from generator is reset and starts a fresh, re-seeded sequence if used again.
+`shared_generator` is a stateless handle to the global state, so all instances are interchangeable.
 
 State machine (both flavors):
 
@@ -264,7 +279,7 @@ State machine (both flavors):
 | `now > last_ts` | fresh entropy draw |
 | `now == last_ts` | increment previous entropy by 1 |
 | `now < last_ts` | fail closed: `errc::time_reversed`, state preserved |
-| entropy at maximum | `errc::generation_overflow`, state preserved |
+| entropy at maximum | `next()`: `errc::generation_overflow`; `reserve()`: empty reservation |
 
 ### Thread-safety guarantees
 
@@ -273,6 +288,7 @@ State machine (both flavors):
 | `generate()` | none (thread-local entropy) | safe from any thread; no ordering promise within a millisecond (per spec) |
 | `unsynchronized_generator` | none | strict per-instance order; cross-thread order not guaranteed |
 | `shared_generator` | lock-free CAS (x86-64) / mutex fallback | strict **global** order: emission order == value order |
+| `reservation` | none | iterating an already-reserved block is pure and repeatable |
 
 The shared flavor uses a `cmpxchg16b` CAS on a 16-byte aligned state on x86-64 (inline asm on GCC,
 `_InterlockedCompareExchange128` on MSVC), and a mutex-guarded implementation elsewhere. Plain
@@ -281,14 +297,14 @@ implementations pass the identical test suite and are required to exhibit identi
 behavior (differential testing); the mutex flavor additionally validates under ThreadSanitizer. The
 CAS tier takes a CAS-shaped state snapshot before each attempt, so the decision and committing CAS
 use the same state. This preserves strict global order and disjoint reservations even when several
-threads first use a freshly constructed shared generator in the same millisecond.
+threads first use a shared generator in the same millisecond.
 
 ### Resuming after restart
 
 A monotonic sequence can continue from a persisted id:
 
 ```cpp
-auto m = ulid26::unsynchronized_generator::resume(last_id_from_disk);
+ulid26::unsynchronized_generator m{last_id_from_disk};
 ```
 
 ## Text codec
@@ -325,9 +341,8 @@ t.resize_and_overwrite(ulid26::ulid::string_length,
     });
 ```
 
-The same shape scales to batches: `encode(ids, chars)` takes
-`chars.size() == 26 * ids.size()`, so a whole block of ids materializes
-with one `resize_and_overwrite(n * ulid::string_length, ...)` call.
+The same shape scales to a block: one `resize_and_overwrite(n * ulid::string_length, ...)` call
+materializes any number of ids with no per-id allocation.
 
 ### Validation
 
@@ -337,8 +352,7 @@ bool ok = ulid26::is_valid("01arz3ndektsv4rrffq69g5fav");
 
 `is_valid` runs the scalar codec without materializing a value: malformed
 input exits at the check, and the first-character overflow cap applies exactly
-as in `decode`. Batch `encode` fills caller storage with the same direct-shift
-loop as `to_chars` (see Performance).
+as in `decode`.
 
 ## Performance
 
@@ -349,25 +363,12 @@ per-ULID times) on an Intel Core i5-8265U (Whiskey Lake, AVX2). Reproduce with
 Timings are data-independent: the text kernels run the full pass with no
 early exit, so valid and malformed input cost the same.
 
-Batch sweep, ours (ns/ULID at 1k, 10k and 100k ULIDs — L1-, L2- and
-LLC-resident; flat across sizes, so the bottleneck is instruction count, not
-cache). Hand-rolled scalar loops measure identically — the batch API wrapper
-costs nothing over calling the core per element:
-
-| operation | 1k | 10k | 100k |
-|---|---|---|---|
-| batch `decode` | 22.8 | 22.9 | 23.0 |
-| batch `encode` | 9.2 | 9.3 | 9.4 |
-| `is_valid` | 18.7 | 18.8 | 19.2 |
-
-Against the reference C++ library (`suyash/ulid`, pinned commit `3a46362`,
-`bench_reference.cpp`, ns/ULID at 100k):
+Single-value codec numbers (ns/ULID at 100k):
 
 | operation | ours | reference |
 |---|---|---|
-| decode blocks | 27.5 | 15.2 (validates nothing, uppercase-only) |
-| decode each | 36.6 | 16.6 (ditto) |
-| encode blocks | 9.8 | 15.1 |
+| decode (validated) | 36.6 | 16.6 (validates nothing, uppercase-only) |
+| encode | 9.8 | 15.1 |
 | validate | 20.2 | N/A (no such API) |
 | compare | 1.1 | 0.9 |
 | timestamp | 0.8 | 2.5 |
@@ -375,18 +376,17 @@ Against the reference C++ library (`suyash/ulid`, pinned commit `3a46362`,
 
 Fairness notes: reference decode performs no validation and folds no case (lowercase input decodes
 to silent garbage), so its decode lead is the price of our spec-mandated rejection — and our
-`is_valid` (20.2ns) costs barely more than its *unchecked* decode (15.2ns). Everywhere else the
-scalar core matches or beats it. The two implementations agree byte-exactly on 100k random values
-(verified at benchmark setup).
+`is_valid` (20.2ns) costs barely more than its *unchecked* decode. Everywhere else the scalar core
+matches or beats it. The two implementations agree byte-exactly on 100k random values (verified at
+benchmark setup).
 
-Accepted loss: validated decode. The `decode blocks` / `decode each` gaps are a contract gap, not a
-decoder-throughput gap: the reference decoder assumes 26 valid uppercase characters, while ours
-validates length, alphabet, case, range, and materializes either values or structured errors. We
-accept that cost rather than add an unchecked public decoder. The residual `compare` gap (~0.2ns,
-stable across repetitions) is not contractual either — and not worth chasing: a scratch probe of
-defaulted-`<=>` `<` versus an explicit short-circuit `<` on identical data measured the defaulted
-shape far faster (branchless vs ~50% mispredicts on random data), so `operator<=> = default` already
-is the fast shape.
+Accepted loss: validated decode. The gap is a contract gap, not a decoder-throughput gap: the
+reference decoder assumes 26 valid uppercase characters, while ours validates length, alphabet,
+case, range, and materializes either values or structured errors. We accept that cost rather than
+add an unchecked public decoder. The residual `compare` gap (~0.2ns, stable across repetitions) is
+not contractual either — and not worth chasing: a scratch probe of defaulted-`<=>` `<` versus an
+explicit short-circuit `<` on identical data measured the defaulted shape far faster (branchless vs
+~50% mispredicts on random data), so `operator<=> = default` already is the fast shape.
 
 | generation | ns/op |
 |---|---|
@@ -394,24 +394,10 @@ is the fast shape.
 | `unsynchronized_generator::next()` | ~20 |
 | `shared_generator::next()` (uncontended) | ~32 |
 
-### View-vs-bulk contention (`bench_ranges.cpp`, ns/ULID, 64-id takes)
-
-| shape | 1 thread | 2 | 4 | 8 |
-|---|---|---|---|---|
-| local view (no sync) | ~28 | — | — | — |
-| shared view (snapshot + commit CAS per id) | ~45 | ~128 | ~409 | ~1107 |
-| shared bulk (snapshot + commit CAS per 64) | ~1.1 | ~3.0 | ~6.0 | ~15.6 |
-
-The shared CAS tier takes a state-snapshot CAS and a committing CAS per successful attempt. Bulk
-reservations amortize that synchronization over a block and degrade much more gracefully under
-contention. The harness discards runs that catch a stepped-back clock (`time_reversed` fail-closed)
-instead of undercounting; this fired live during multithreaded runs on this TSC-clocked box — a live
-demonstration that the fail-closed path works, and why the single-threaded clock looks monotonic
-while 8 cores reading TSCs can momentarily disagree across a millisecond boundary.
-
-The batch codec is scalar throughout: direct shifts per 5-bit group on encode, table loop plus range
-cap on decode. The scalar `constexpr` codec doubles as the reference for the batch API differential
-tests.
+Reservations reduce the shared committing synchronization to one event per block; draining the
+returned range is local and needs no further calls. The text codec is scalar throughout: direct
+shifts per 5-bit group on encode, table loop plus range cap on decode. The scalar `constexpr` codec
+doubles as the reference for the codec differential tests.
 
 ## Spec conformance
 
@@ -433,58 +419,37 @@ tests.
   `hi[15:0] || lo` = entropy). Wire format is a serialization concern handled by
   `to_bytes`/`from_bytes`; no `__uint128_t` dependency (standard 128-bit
   integers are not in C++26 — P3140 withdrawn; `_BitInt` targets C++29).
-- **Errors**: fallible value and batch surfaces return `std::expected` carrying
-  a `std::error_code` in the `"ulid"` category, composable with any existing
-  error-code codebase. Entropy acquisition may throw when the OS source fails.
-- **Constexpr**: the value type, scalar codec, batch validation helpers and
-  formatter are constexpr; generation is runtime-only by nature (clock +
-  entropy).
-- **Testing**: spec vectors, property round-trips, monotonic bursts and
-  exhaustion, clock-regression fail-closed, concurrency stress (global
-  sortedness and uniqueness), TSAN on the mutex flavor, ASAN/UBSAN everywhere,
-  and batch-vs-scalar differential testing on valid and malformed inputs.
+- **Errors**: fallible surfaces return `std::expected` carrying a `std::error_code` in the `"ulid"`
+  category, composable with any existing error-code codebase. Reservations instead report capacity
+  through `reservation::size()`: a short block is success. Entropy acquisition may throw when the
+  OS source fails.
+- **Constexpr**: the value type, scalar codec and formatter are constexpr; generation is
+  runtime-only by nature (clock + entropy).
+- **Testing**: spec vectors, property round-trips, monotonic bursts and exhaustion,
+  clock-regression fail-closed, reservation range/size contract, concurrency stress (global
+  sortedness and uniqueness), TSAN on the mutex flavor, and ASAN/UBSAN everywhere.
 
 ## Repository layout
 
 ```
 ulid26/value.hpp             value layer: errors, scalar codec, ulid, parse, hash, formatter
-ulid26/ulid26.hpp            generator umbrella over value.hpp: entropy engines, one-shot and
-                             monotonic generation, bulk reservations
-ulid26/ranges.hpp            iterator adapter: generators as input_ranges
+ulid26/generators.hpp        generation layer: entropy engines, one-shot and monotonic generation,
+                             reservations
+ulid26/ulid26.hpp            include-all umbrella over the two layers
 src/                             (nothing — header-only)
-test/                            constexpr, spec vectors, property, stress, batch differential
-bench/                           Google Benchmark suites (sweep + reference comparison)
+test/                            constexpr, spec vectors, property, stress, generation/reservations
+bench/                           Google Benchmark suites for the value codec
 ```
 
-A header only library purposefully composed of multiple headers for a good reason: include-what-you-use:
+The library is deliberately composed of two headers for include-what-you-use:
 
 - `<ulid26/value.hpp>` for value, parsing, formatting, hashing, comparison and error codes (the minimal layer);
-- `<ulid26/generators.hpp>` for the monotonic generators and entropy engines (pulls `< mutex>`, `<atomic>`, `<random>`, `<chrono>` and `<ulid26/value.hpp>`); and
-- `<ulid26/ranges.hpp>` for iterator adapters over generators (pulls `<ulid26/generators.hpp>`)
-- `<ulid26/ulid26.hpp>` for the umbrella that includes all of the above, for convenience.
+- `<ulid26/generators.hpp>` for generation, entropy engines and reservations (pulls `<mutex>`,
+  `<random>`, `<chrono>` and `<ulid26/value.hpp>`); and
+- `<ulid26/ulid26.hpp>` for the umbrella that includes both layers, for convenience.
 
-## Ranges API
-
-The iterator adapter exposes any monotonic generator as a single-pass `std::ranges::input_range` of
-`ulid` values, so generation composes with the standard pipeline. The view borrows the generator; on
-failure the range ends and the error is parked in the generator (`last_error()`) — always
-check it after a loop that can end on its own:
-
-```cpp
-#include <ulid26/ranges.hpp>
-
-for (auto u : ulid26::ranges::values(g) | std::views::take(10))
-    consume(u);
-if (g.last_error()) /* ... */;
-```
-
-Contention contract: each increment is one `next()`. Pinned threads drain a `monotonic_local` view
-(zero sync); migrating threads a `monotonic_shared` view. Concurrent multi-threaded draining of one
-shared generator is correct but **expensive**: it costs a state snapshot plus a commit CAS per id —
-high-ingestion pipelines should reserve `next(n)` blocks (one commit per block) and drain locally.
-See `bench/bench_ranges.cpp` for the view-vs-bulk curves at 1–8 threads.
-
-Reservations also model a range, which are far more performant iteration.
+Generation has no separate iterator adapter: a reservation *is* the range. Drain it with a
+range-for, compose it with `std::views`, or take a new reservation when the block is used up.
 
 ## Fun fact
 
