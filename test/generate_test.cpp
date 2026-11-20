@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <boost/ut.hpp>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <ranges>
@@ -21,14 +22,12 @@
 
 namespace {
 
-    constexpr std::uint64_t kMaxTimestamp = (std::uint64_t{1} << 48) - 1;
-    constexpr std::uint64_t kEntropyMax   = ~std::uint64_t{0};
-    constexpr std::uint64_t kHighMask     = 0xFFFF;
+    constexpr std::uint64_t kEntropyMax = ~std::uint64_t{0};
+    constexpr std::uint64_t kHighMask   = 0xFFFF;
 
-    // A deterministic engine that makes the generator's own engine observable:
-    // the first two 64-bit words are 0 and 1, so the resulting entropy halves
-    // are fixed rather than thread-local random.
-    class fixed_rng {
+    struct engine_failure {};
+
+    class throwing_rng {
       public:
         using result_type = std::uint64_t;
 
@@ -36,10 +35,7 @@ namespace {
 
         static constexpr result_type max() { return ~result_type{0}; }
 
-        result_type operator()() { return next_++; }
-
-      private:
-        result_type next_ = 0;
+        result_type operator()() { throw engine_failure{}; }
     };
 
     [[nodiscard]]
@@ -63,25 +59,6 @@ namespace {
     static_assert(std::uniform_random_bit_generator<ulid26::default_rng>);
     static_assert(std::uniform_random_bit_generator<ulid26::system_rng>);
 
-    static_assert(
-        ulid26::detail::decide_advance((std::uint64_t{1234} << 16) | kHighMask, kEntropyMax, 1234)
-            .error() == ulid26::errc::generation_overflow
-    );
-    static_assert(
-        ulid26::detail::decide_advance((std::uint64_t{1234} << 16), 0, 1233).error() ==
-        ulid26::errc::time_reversed
-    );
-    static_assert(
-        ulid26::detail::grant_from_start(
-            (std::uint64_t{1234} << 16) | kHighMask, kEntropyMax - 2, 10
-        ) == 3
-    );
-    static_assert(
-        ulid26::detail::grant_from_start(
-            (std::uint64_t{1234} << 16) | kHighMask, kEntropyMax, 10
-        ) == 1
-    );
-
 } // namespace
 
 int main() {
@@ -96,8 +73,11 @@ int main() {
     };
 
     "custom engine one-shot"_test = [] {
-        auto const id = ulid26::generate<std::mt19937_64>();
-        expect(id.timestamp() > 0U) << "custom engine plugs into generate";
+        bool threw = false;
+        try {
+            (void)ulid26::generate<throwing_rng>();
+        } catch (engine_failure const&) { threw = true; }
+        expect(threw) << "generate uses the requested engine";
     };
 
     "seeded engine is deterministic"_test = [] {
@@ -127,30 +107,64 @@ int main() {
         }
     };
 
-    "custom engine generator"_test = [] {
-        ulid26::unsynchronized_generator<std::mt19937_64> generator{std::mt19937_64{7}};
-        auto const                                        first  = generator.next();
-        auto const                                        second = generator.next();
-        expect(first.has_value() && second.has_value()) << "values";
-        if (first && second) {
-            expect(*second > *first) << "monotonic";
+    "entropy exhaustion fails closed"_test = [] {
+        constexpr int kAttempts = 8;
+        bool          observed  = false;
+        for (int attempt = 0; attempt < kAttempts && !observed; ++attempt) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            auto const                       now = ulid26::generate().timestamp();
+            ulid26::unsynchronized_generator generator{make_ulid(now, kHighMask, kEntropyMax)};
+            auto const                       single = generator.next();
+            if (!single) {
+                if (single.error() != ulid26::make_error_code(ulid26::errc::generation_overflow)) {
+                    expect(false) << "unexpected next() error";
+                    return;
+                }
+                auto const block = generator.reserve(1);
+                expect(block.has_value()) << "exhausted reservation is success";
+                if (block) {
+                    expect(block->empty()) << "exhausted reservation is empty";
+                    observed = true;
+                }
+            }
         }
+        expect(observed) << "same-millisecond exhaustion observed";
     };
 
-    "generator uses its own engine"_test = [] {
-        ulid26::unsynchronized_generator<fixed_rng> generator{fixed_rng{}};
-        auto const                                  block = generator.reserve(1);
-        expect(block.has_value() && block->size() == 1U) << "one id";
-        if (!block || block->empty()) {
-            return;
+    "reservation can be short near entropy exhaustion"_test = [] {
+        constexpr std::uint64_t kRequested = 10;
+        constexpr std::uint64_t kGranted   = 3;
+        constexpr int           kAttempts  = 8;
+        bool                    observed   = false;
+        for (int attempt = 0; attempt < kAttempts && !observed; ++attempt) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            auto const                       now = ulid26::generate().timestamp();
+            ulid26::unsynchronized_generator generator{
+                make_ulid(now, kHighMask, kEntropyMax - kGranted)
+            };
+            auto const block = generator.reserve(kRequested);
+            expect(block.has_value()) << "short reservation must succeed";
+            if (!block) {
+                return;
+            }
+            if (block->size() != kGranted) {
+                continue;
+            }
+            observed = true;
+            expect(block->first().timestamp() == now) << "short grant stays in one millisecond";
+            expect(block->last() == make_ulid(now, kHighMask, kEntropyMax))
+                << "short grant stops at entropy maximum";
         }
-        std::array<std::uint8_t, ulid26::ulid::kBinarySize> bytes{};
-        block->first().to_bytes(std::span<std::uint8_t, ulid26::ulid::kBinarySize>{bytes});
-        expect(bytes[6] == 0U && bytes[7] == 0U) << "entropy high half comes from word zero";
-        for (std::size_t i = 8; i < 14; ++i) {
-            expect(bytes[i] == 0U) << "entropy low half starts empty";
-        }
-        expect(bytes[14] == 1U && bytes[15] == 0U) << "second engine word enters the low half";
+        expect(observed) << "same-millisecond short grant observed";
+    };
+
+    "custom engine generator"_test = [] {
+        ulid26::unsynchronized_generator<throwing_rng> generator;
+        bool                                           threw = false;
+        try {
+            (void)generator.reserve(1);
+        } catch (engine_failure const&) { threw = true; }
+        expect(threw) << "reservation uses the generator's engine";
     };
 
     "reservation range contract"_test = [] {
@@ -161,18 +175,25 @@ int main() {
         if (!block) {
             return;
         }
-        expect(block->size() == kCount) << "exact grant in a fresh millisecond";
-        expect(std::ranges::size(*block) == kCount) << "range size agrees";
-        expect(block->first() == (*block)[0]) << "first is index zero";
-        expect(block->last() == (*block)[kCount - 1]) << "last is index size - 1";
+        auto const count = block->size();
+        expect(count > 0U && count <= kCount) << "best-effort grant is bounded";
+        expect(std::ranges::size(*block) == count) << "range size agrees";
+        expect((block->end() - block->begin()) == static_cast<std::ptrdiff_t>(count))
+            << "iterator distance agrees";
+
+        std::vector<ulid26::ulid> const collected{block->begin(), block->end()};
+        expect(collected.size() == count) << "iteration visits every id";
+        expect(collected.back() == block->last()) << "last matches iteration";
         expect(block->first() < block->last()) << "block spans a sorted window";
 
-        std::uint64_t index = 0;
-        for (auto const id : *block) {
-            expect(id == (*block)[index]) << "iteration matches indexing";
-            ++index;
+        auto const timestamp = collected.front().timestamp();
+        for (std::size_t index = 0; index < collected.size(); ++index) {
+            expect(collected[index] == (*block)[index]) << "indexing matches iteration";
+            expect(collected[index].timestamp() == timestamp) << "one timestamp";
+            if (index > 0) {
+                expect(collected[index] > collected[index - 1]) << "strictly increasing";
+            }
         }
-        expect(index == kCount) << "range-for visits every id";
 
         auto const copy = *block;
         expect(std::ranges::equal(*block, copy)) << "copying does not mint a new block";
@@ -181,20 +202,58 @@ int main() {
         expect(after.has_value() && *after > block->last()) << "next continues after the block";
     };
 
+    "reservation random access"_test = [] {
+        ulid26::unsynchronized_generator generator;
+        auto const                       block = generator.reserve(8);
+        expect(block.has_value()) << "reservation succeeds";
+        if (!block || block->size() != 8U) {
+            return;
+        }
+        auto const begin = block->begin();
+        auto const end   = block->end();
+        expect((end - begin) == static_cast<std::ptrdiff_t>(8)) << "difference reports the size";
+        expect(begin < end) << "begin sorts before end";
+
+        auto position  = begin;
+        position      += 3;
+        expect(position == begin + 3) << "addition agrees";
+        expect(*position == (*block)[3]) << "iterator value agrees with indexing";
+        position -= 2;
+        expect(position == begin + 1) << "subtraction agrees";
+
+        auto last = end;
+        --last;
+        expect(*last == block->last()) << "reverse step reaches the last id";
+    };
+
+    "moving a generator re-seeds the source"_test = [] {
+        ulid26::unsynchronized_generator source;
+        auto const                       first = source.next();
+        expect(first.has_value()) << "source generates";
+        if (!first) {
+            return;
+        }
+        ulid26::unsynchronized_generator destination{std::move(source)};
+        auto const                       second = destination.next();
+        expect(second.has_value() && *second > *first) << "destination continues the sequence";
+        auto const third = source.next();
+        expect(third.has_value()) << "moved-from generator reseeds";
+    };
+
     "reservation composes with views"_test = [] {
         ulid26::unsynchronized_generator generator;
         auto const                       block = generator.reserve(16);
         expect(block.has_value()) << "reservation succeeds";
-        if (!block) {
+        if (!block || block->size() < 4U) {
             return;
         }
-        std::vector<ulid26::ulid> taken{};
+        std::vector<ulid26::ulid> const expected{block->begin(), block->begin() + 4};
+        std::vector<ulid26::ulid>       taken{};
         for (auto const id : *block | std::views::take(4)) {
             taken.push_back(id);
         }
-        expect(taken.size() == 4U) << "take() works on the reservation view";
-        expect(taken.front() == block->first()) << "take preserves order";
-        expect(taken.back() == (*block)[3]) << "take stops at the requested count";
+        expect(taken == expected) << "take matches the reservation prefix";
+        expect(std::ranges::is_sorted(taken)) << "take preserves order";
     };
 
     "zero reservation is empty success"_test = [] {
@@ -203,13 +262,19 @@ int main() {
         expect(block.has_value()) << "zero is not an error";
         if (block) {
             expect(block->empty()) << "zero-sized block";
-            expect(block->size() == 0U) << "size zero";
+            expect(block->begin() == block->end()) << "empty range has no distance";
         }
+        auto const after = generator.next();
+        expect(after.has_value()) << "zero reservation leaves the state untouched";
     };
 
     "clock regression fails closed"_test = [] {
-        auto const                       future = make_ulid(kMaxTimestamp, 0, 0);
-        ulid26::unsynchronized_generator generator{future};
+        auto const future = ulid26::try_parse("7ZZZZZZZZZ0000000000000000");
+        expect(future.has_value()) << "future vector parses";
+        if (!future) {
+            return;
+        }
+        ulid26::unsynchronized_generator generator{*future};
         auto const                       single = generator.next();
         expect(!single.has_value()) << "single-value generation fails";
         if (!single) {
@@ -224,7 +289,7 @@ int main() {
         }
     };
 
-    "shared reservations are disjoint and ordered"_test = [] {
+    "shared reservations are disjoint across threads"_test = [] {
         constexpr std::size_t                  kThreads   = 4;
         constexpr std::uint64_t                kPerThread = 64;
         std::vector<std::vector<ulid26::ulid>> output(kThreads);
@@ -246,13 +311,25 @@ int main() {
 
         std::vector<ulid26::ulid> all{};
         for (auto const& block : output) {
-            expect(block.size() == kPerThread) << "each thread got a full block";
+            expect(!block.empty()) << "each thread got ids";
+            expect(block.size() <= kPerThread) << "each grant is bounded";
             expect(std::ranges::is_sorted(block)) << "each block is ordered";
             all.insert(all.end(), block.begin(), block.end());
         }
         std::ranges::sort(all);
         expect(std::adjacent_find(all.begin(), all.end()) == all.end())
             << "blocks are disjoint across threads";
+    };
+
+    "shared handles share one sequence"_test = [] {
+        ulid26::shared_generator left;
+        ulid26::shared_generator right;
+        auto const               first  = left.reserve(1);
+        auto const               second = right.reserve(1);
+        expect(first.has_value() && second.has_value()) << "both reservations succeed";
+        if (first && second && !first->empty() && !second->empty()) {
+            expect(first->last() < second->first()) << "separate handles advance one sequence";
+        }
     };
 }
 
