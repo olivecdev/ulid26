@@ -93,6 +93,7 @@ target_link_libraries(myapp PRIVATE ulid26::ulid26)
 ```cpp
 #include <ulid26/ulid26.hpp>
 #include <print>
+#Include <iostream>
 
 int main() {
     auto id = ulid26::generate();          // thread-safe one-shot
@@ -189,13 +190,6 @@ auto id = ulid26::generate();
 
 // Same, with an explicit engine (see Custom entropy engines below).
 auto oid = ulid26::generate<ulid26::system_rng>();
-
-// Bulk convenience: a plain loop over generate() — one clock read and one
-// fresh entropy draw per id, no ordering promise, never fails.
-// Performance-sensitive clients that need ordered bulk should opt for the monotonic_shared::next(n)
-// below (~1ns per id in 64-blocks, strictly increasing, fail-closed).
-std::array<ulid26::ulid, 64> batch;
-ulid26::generate_n(batch);
 ```
 
 ### Monotonic generation
@@ -205,20 +199,43 @@ previous entropy by one instead of drawing fresh randomness, guaranteeing strict
 output and much faster generation. The monotonic generators are stateful and have two flavors:
 
 ```cpp
-// Per-thread: zero synchronization, strictly increasing per thread.
-ulid26::monotonic_local m;
+// Per-generator instance state: zero synchronization, strictly increasing per thread. Use it when
+// ulid generation happens via a single object never shared across threads.
+ulid26::unsynchronized_generator m();
 auto a = m();    // -> std::expected<ulid, std::error_code>
 auto b = m();    // b > a whenever the clock confirms the same or later millisecond
 
-// A local generator owns the engine passed at construction. A seeded engine
-// makes the entropy stream deterministic.
-ulid26::monotonic_local<ulid26::default_rng> seeded{
-    ulid26::default_rng{42}};
+// A local generator owns the engine passed at construction. A seeded engine makes the entropy
+// stream deterministic.
+ulid26::unsynchronized_generator<ulid26::default_rng> seeded{ulid26::default_rng{42}};
 
-// Shared: strictly increasing across ALL threads.
-ulid26::monotonic_shared g;
+// Shared, all instances refer to the same global atomic state: strictly increasing across ALL threads.
+// Safer but less performant. Use it when you're unsure about which thread will generate the next ULID.
+ulid26::shared_generator g;
 auto c = g();
 ```
+
+### Bulk reservations
+
+High-ingestion pipelines can reserve blocks of ids at once, reducing the committing synchronization
+to one event per block. A successful reservation behaves exactly **as if** all its ids were created
+within the same millisecond — strictly increasing under one timestamp:
+
+```cpp
+ulid26::shared_generator g;
+auto r = g.next(64);   // bulk next(): 64 ids, all strictly after everything ever issued
+// ids handed out locally; emission order may invert within the reserved window
+```
+
+The range never spans milliseconds and never partially fills: a count that
+does not fit the remainder of the current millisecond fails closed with
+`errc::generation_overflow`, leaving generator state untouched.
+
+Even if two threads call `next(64)` in the same millisecond, we guarantee that the two blocks are
+disjoint and strictly increasing across threads. The shared state stores the last ULID of the
+reserved block, not the first: once a thread succeeds in reserving a block, the next thread sees a
+strictly higher last ULID and cannot overlap. The atomic (or mutex-based) protocol ensures no thread
+can observe a partial or outdated state.
 
 ### Custom entropy engines
 
@@ -226,7 +243,7 @@ Generators take any standard uniform random bit generator as their template para
 `std::mt19937_64` plugs in with zero glue code:
 
 ```cpp
-ulid26::monotonic_local<std::mt19937_64> gen{std::mt19937_64{42}};
+ulid26::unsynchronized_generator<std::mt19937_64> gen{std::mt19937_64{42}};
 ```
 
 The in-house engines are `default_rng` (`ChaCha20`, seeded once per thread from the OS; ~28ns per
@@ -253,9 +270,9 @@ State machine (both flavors):
 
 | flavor | synchronization | guarantee |
 |---|---|---|
-| `generate()` / `generate_n()` | none (thread-local entropy) | safe from any thread; no ordering promise within a millisecond (per spec) |
-| `monotonic_local` | none | strict per-thread order; cross-thread order not guaranteed |
-| `monotonic_shared` | lock-free CAS (x86-64) / mutex fallback | strict **global** order: emission order == value order |
+| `generate()` | none (thread-local entropy) | safe from any thread; no ordering promise within a millisecond (per spec) |
+| `unsynchronized_generator` | none | strict per-instance order; cross-thread order not guaranteed |
+| `shared_generator` | lock-free CAS (x86-64) / mutex fallback | strict **global** order: emission order == value order |
 
 The shared flavor uses a `cmpxchg16b` CAS on a 16-byte aligned state on x86-64 (inline asm on GCC,
 `_InterlockedCompareExchange128` on MSVC), and a mutex-guarded implementation elsewhere. Plain
@@ -266,34 +283,12 @@ CAS tier takes a CAS-shaped state snapshot before each attempt, so the decision 
 use the same state. This preserves strict global order and disjoint reservations even when several
 threads first use a freshly constructed shared generator in the same millisecond.
 
-### Bulk reservations
-
-High-ingestion pipelines can reserve blocks of ids at once, reducing the committing synchronization
-to one event per block. A successful reservation behaves exactly **as if** all its ids were created
-within the same millisecond — strictly increasing under one timestamp:
-
-```cpp
-ulid26::monotonic_shared g;
-auto r = g.next(64);   // bulk next(): 64 ids, all strictly after everything ever issued
-// ids handed out locally; emission order may invert within the reserved window
-```
-
-The range never spans milliseconds and never partially fills: a count that
-does not fit the remainder of the current millisecond fails closed with
-`errc::generation_overflow`, leaving generator state untouched.
-
-Even if two threads call `next(64)` in the same millisecond, we guarantee that the two blocks are
-disjoint and strictly increasing across threads. The shared state stores the last ULID of the
-reserved block, not the first: once a thread succeeds in reserving a block, the next thread sees a
-strictly higher last ULID and cannot overlap. The atomic (or mutex-based) protocol ensures no thread
-can observe a partial or outdated state.
-
 ### Resuming after restart
 
 A monotonic sequence can continue from a persisted id:
 
 ```cpp
-auto m = ulid26::monotonic_local::resume(last_id_from_disk);
+auto m = ulid26::unsynchronized_generator::resume(last_id_from_disk);
 ```
 
 ## Text codec
@@ -333,22 +328,6 @@ t.resize_and_overwrite(ulid26::ulid::string_length,
 The same shape scales to batches: `encode(ids, chars)` takes
 `chars.size() == 26 * ids.size()`, so a whole block of ids materializes
 with one `resize_and_overwrite(n * ulid::string_length, ...)` call.
-
-### Batches — three layers
-
-```cpp
-// 1. Fixed size, fully compile-time checked (M deduced from the span extent).
-//    M must be a multiple of 26 — or it does not compile.
-std::array<char, 104> text = /* 4 ULIDs */;
-auto ids = ulid26::decode(std::span{text});      // array<ulid, 4>
-
-// 2. Fixed size into caller-provided storage; both extents checked at compile time.
-ulid26::decode_into(std::span{text}, std::span{out4});
-
-// 3. Dynamic sizes (runtime-checked: in.size() == 26 * out.size()).
-ulid26::decode(std::span{buf.data(), buf.size()}, std::span{out.data(), n});
-ulid26::encode(std::span{ids.data(), n},          std::span{chars.data(), 26 * n});
-```
 
 ### Validation
 
@@ -412,8 +391,8 @@ is the fast shape.
 | generation | ns/op |
 |---|---|
 | `generate()` | ~72 |
-| `monotonic_local::next()` | ~20 |
-| `monotonic_shared::next()` (uncontended) | ~32 |
+| `unsynchronized_generator::next()` | ~20 |
+| `shared_generator::next()` (uncontended) | ~32 |
 
 ### View-vs-bulk contention (`bench_ranges.cpp`, ns/ULID, 64-id takes)
 
@@ -471,18 +450,15 @@ tests.
 ulid26/value.hpp             value layer: errors, scalar codec, ulid, parse, hash, formatter
 ulid26/ulid26.hpp            generator umbrella over value.hpp: entropy engines, one-shot and
                              monotonic generation, bulk reservations
-ulid26/batch.hpp             batch text API (fixed/dynamic decode, encode, validation)
 ulid26/ranges.hpp            iterator adapter: generators as input_ranges
 src/                             (nothing — header-only)
 test/                            constexpr, spec vectors, property, stress, batch differential
 bench/                           Google Benchmark suites (sweep + reference comparison)
-LESSONS.md                       SIMD arc: theory, measurements, removal
 ```
 
 A header only library purposefully composed of multiple headers for a good reason: include-what-you-use:
 
 - `<ulid26/value.hpp>` for value, parsing, formatting, hashing, comparison and error codes (the minimal layer);
-- `<ulid26/batch.hpp>` for bulk text APIs (decode, encode, validation, pulls `<ulid26/value.hpp>`);
 - `<ulid26/generators.hpp>` for the monotonic generators and entropy engines (pulls `< mutex>`, `<atomic>`, `<random>`, `<chrono>` and `<ulid26/value.hpp>`); and
 - `<ulid26/ranges.hpp>` for iterator adapters over generators (pulls `<ulid26/generators.hpp>`)
 - `<ulid26/ulid26.hpp>` for the umbrella that includes all of the above, for convenience.
@@ -507,6 +483,8 @@ Contention contract: each increment is one `next()`. Pinned threads drain a `mon
 shared generator is correct but **expensive**: it costs a state snapshot plus a commit CAS per id —
 high-ingestion pipelines should reserve `next(n)` blocks (one commit per block) and drain locally.
 See `bench/bench_ranges.cpp` for the view-vs-bulk curves at 1–8 threads.
+
+Reservations also model a range, which are far more performant iteration.
 
 ## Fun fact
 
