@@ -57,7 +57,7 @@ include(FetchContent)
 FetchContent_Declare(
     ulid26
     GIT_REPOSITORY https://github.com/olivecdev/ulid26
-    GIT_TAG        v0.0.1
+    GIT_TAG        v1.0.0
 )
 FetchContent_MakeAvailable(ulid26)
 
@@ -78,16 +78,17 @@ int main() {
 
 ## The value type `ulid`
 
-`ulid26::ulid` is a pure value type: 16 bytes, trivially copyable, standard layout, fully
-`constexpr`. It holds a 48-bit millisecond timestamp and 80 bits of entropy, and compares
-lexicographically exactly as its canonical string does — `operator<=>` is the spec's byte order.
+`ulid26::ulid` is a pure value type: 16 bytes, trivially copyable, standard layout, and
+`constexpr` for value operations and the scalar codec. It holds a 48-bit millisecond timestamp and
+80 bits of entropy, and compares lexicographically exactly as its canonical string does —
+`operator<=>` is the spec's byte order.
 
 ```cpp
 namespace ulid26 {
 class ulid {
 public:
-    static constexpr std::size_t string_length = 26; // canonical text length
-    static constexpr std::size_t binary_length = 16; // binary length
+    static constexpr std::size_t kTextSize   = 26; // canonical text length
+    static constexpr std::size_t kBinarySize = 16; // binary length
 
     ulid();                                        // nil: 00000000000000000000000000
 
@@ -95,17 +96,16 @@ public:
 
     static std::expected<ulid, std::error_code> from_string(std::string_view);
                                                      // Crockford base32, case-insensitive
-    static std::expected<ulid, std::error_code> from_bytes(std::span<const std::byte, 16>);
-                                                     // network byte order
-    std::array<char, 26> to_string() const;
-    void to_chars(std::span<char, 26> out) const;    // non-allocating write (see below)
-    std::string to_std_string() const;               // one allocation, via resize_and_overwrite
-    std::array<std::byte, 16> to_bytes() const;
+    static ulid from_bytes(std::span<const std::byte, kBinarySize>) noexcept;
+                                                     // network byte order, infallible
+    void to_chars(std::span<char, kTextSize> out) const; // non-allocating write (see below)
+    std::string to_string() const;                   // one allocation, via resize_and_overwrite
+    void to_bytes(std::span<std::byte, kBinarySize> out) const noexcept;
 
     friend std::strong_ordering operator<=>(ulid, ulid) = default; // == canonical string order
     // std::hash<ulid> and hash_value() provided
     // std::formatter<ulid> provided: std::format("{}", id) is canonical text
-    // (any format spec is a compile-time error)
+    // (non-empty format specs are rejected)
 };
 }
 ```
@@ -114,17 +114,18 @@ Default construction produces the nil value — compare with `u == ulid26::ulid{
 
 The value type and scalar codec are `constexpr`: the library ships `static_assert`-driven
 specification tests, including round-trip proofs and malformed-input rejection, evaluated at compile
-time. The public `from_string`/`from_bytes` wrap the scalar core to produce `std::error_code`, which
-is not constexpr-constructible, so the compile-time entries are separate names: `is_valid` answers
-validity of a literal, and `parse` parses one into a value, reporting the same precise `errc` the
-runtime API maps to `std::error_code` (`from_string` cannot overload on return type alone).
+time. The public `from_string` wraps the constexpr text parser and maps its `errc` to
+`std::error_code`; `from_bytes` is an infallible binary conversion. The compile-time entries are
+separate names: `is_valid` answers validity of a literal, and `try_parse` parses one into a value,
+reporting the same precise `errc` the runtime API maps to `std::error_code` (`from_string` cannot
+overload on return type alone).
 
 ```cpp
 static_assert(ulid26::is_valid("7ZZZZZZZZZZZZZZZZZZZZZZZZZ"));
 static_assert(!ulid26::is_valid("80000000000000000000000000"));
 static_assert(!ulid26::is_valid("01ARZ3NDEKTSV4RRFFQ69G5FA*"));
-static_assert(ulid26::parse("01ARZ3NDEKTSV4RRFFQ69G5FAV")->timestamp() == 1469922850259ULL);
-static_assert(ulid26::parse("80000000000000000000000000").error() == ulid26::errc::overflow);
+static_assert(ulid26::try_parse("01ARZ3NDEKTSV4RRFFQ69G5FAV")->timestamp() == 1469922850259ULL);
+static_assert(ulid26::try_parse("80000000000000000000000000").error() == ulid26::errc::overflow);
 ```
 
 ## Errors
@@ -198,11 +199,12 @@ auto c = g.next();
 the same engine type — including one constructed independently in each thread — advances the same
 sequence, so per-thread instances are safe and do not fork or partition it. You can equally share a
 single instance by reference. Fresh entropy draws stay thread-local; only the ordering state is
-shared. For independent sequences, use `unsynchronized_generator` per thread.
+shared. For independent sequences when concurrency is not needed, use `unsynchronized_generator`.
 
 `unsynchronized_generator` is non-copyable. Moving transfers the sequence and retires the source
 object: the moved-from generator is reset and starts a fresh, re-seeded sequence if used again.
-`shared_generator` is a stateless handle to the global state, so all instances are interchangeable.
+`shared_generator` is a lightweight handle to the global state. Its only per-object state is a
+cached CAS-tier capability bit, so all instances are interchangeable.
 
 State machine (both flavors):
 
@@ -213,8 +215,8 @@ State machine (both flavors):
 | `now < last_ts` | fail closed: `errc::time_reversed`, state preserved |
 | entropy at maximum | `next()`: `errc::generation_overflow`; `reserve()`: empty reservation |
 
-Generators are stateful, keep them around and reuse for as long as you may need to generate more
-ids throughout the lifetime of your application.
+`unsynchronized_generator` is stateful; keep it around and reuse it for as long as you need more
+ids. `shared_generator` handles are cheap and all address the same global sequence.
 
 Both flavors expose `next()` for a single id and `reserve(count)` for bulk. Prefer `reserve()` for
 anything beyond one id: it reduces the committing synchronization to one event per block and gives
@@ -276,17 +278,25 @@ still holds — the shared counter sequences collisions — but the entropy corr
 |---|---|---|
 | `generate()` | none (thread-local entropy) | safe from any thread; no ordering promise within a millisecond (per spec) |
 | `unsynchronized_generator` | none | strict per-instance order; cross-thread order not guaranteed |
-| `shared_generator` | lock-free CAS (x86-64) / mutex fallback | strict **global** order: emission order == value order |
+| `shared_generator` | lock-free CAS (GCC x86-64 / MSVC x64) / mutex fallback | strict global **commit** order: commit order == value order |
 | `reservation` | none | iterating an already-reserved block is pure and repeatable |
 
-The shared flavor uses a `cmpxchg16b` CAS on a 16-byte aligned state on x86-64 (inline asm on GCC,
-`_InterlockedCompareExchange128` on MSVC), and a mutex-guarded implementation elsewhere. Plain
-standard C++ doesn't guarantee lock-free atomic operations on 16-byte structures. Both
-implementations pass the identical test suite and are required to exhibit identical observable
-behavior (differential testing); the mutex flavor additionally validates under ThreadSanitizer. The
-CAS tier takes a CAS-shaped state snapshot before each attempt, so the decision and committing CAS
-use the same state. This preserves strict global order and disjoint reservations even when several
-threads first use a shared generator in the same millisecond.
+The shared flavor uses a `cmpxchg16b` CAS on a 16-byte aligned state on GCC x86-64 and MSVC x64
+(inline asm on GCC, `_InterlockedCompareExchange128` on MSVC), and a mutex-guarded implementation
+elsewhere. Plain standard C++ doesn't guarantee lock-free atomic operations on 16-byte structures.
+Both implementations pass the identical test suite and are required to exhibit identical observable
+behavior (differential testing); the mutex flavor additionally validates under ThreadSanitizer.
+
+The CAS tier takes one CAS-shaped state snapshot before its first attempt. A failed committing CAS
+reports the current state in its expected operand; the retry reuses that observation instead of
+taking another snapshot. If the state has advanced to a newer millisecond than the cached clock, the
+decision fails and the clock is read again. This keeps the decision and commit on one validated
+state, preserves strict global commit order and disjoint reservations, and avoids a redundant
+snapshot CAS on every contention retry.
+
+Reservation blocks are granted in commit order and are disjoint across threads, but the caller
+controls when it drains them. Application-level emission can therefore lag or interleave even though
+the commit order is the value order.
 
 ### Resuming after restart
 
@@ -308,29 +318,27 @@ auto b = ulid26::ulid::from_bytes(std::span{raw16});              // network byt
 
 ### `std::string` without the extra copy
 
-`to_string()` returns a fixed `array<char, 26>` (not null-terminated) — copying that into a
-`std::string` costs a second pass. For the optimal path, `to_chars` writes the canonical form
-directly into caller-provided storage, so it composes with `std::string::resize_and_overwrite`
-(C++23): exactly one allocation, no default-fill, no intermediate copy and null-termination
-guaranteed by the standard library.
+`to_string()` is the owning conversion: it allocates exactly once via C++23
+`std::string::resize_and_overwrite`, with no default-fill pass and no intermediate copy. For the
+zero-allocation path, `to_chars` writes the canonical form directly into caller-provided storage.
 
 ```cpp
 ulid26::ulid id = ulid26::generate();
 
 // Ready-made: one allocation, implemented with resize_and_overwrite.
-std::string s = id.to_std_string();
+std::string s = id.to_string();
 
-// Client-controlled: same cost, your string, your allocator.
+// Client-controlled: your string, your allocator, no hidden extra copy.
 std::string t;
-t.resize_and_overwrite(ulid26::ulid::string_length,
+t.resize_and_overwrite(ulid26::ulid::kTextSize,
     [&](char* p, std::size_t n) -> std::size_t {
-        id.to_chars(std::span<char, ulid26::ulid::string_length>{
-            p, ulid26::ulid::string_length});
-        return ulid26::ulid::string_length;
+        id.to_chars(std::span<char, ulid26::ulid::kTextSize>{
+            p, ulid26::ulid::kTextSize});
+        return ulid26::ulid::kTextSize;
     });
 ```
 
-The same shape scales to a block: one `resize_and_overwrite(n * ulid::string_length, ...)` call
+The same shape scales to a block: one `resize_and_overwrite(n * ulid::kTextSize, ...)` call
 materializes any number of ids with no per-id allocation.
 
 ### Validation
@@ -439,8 +447,9 @@ Otherwise the build downloads the pinned v2.3.1 header automatically
   category, composable with any existing error-code codebase. Reservations instead report capacity
   through `reservation::size()`: a short block is success. Entropy acquisition may throw when the
   OS source fails.
-- **Constexpr**: the value type, scalar codec and formatter are constexpr; generation is
-  runtime-only by nature (clock + entropy).
+- **Constexpr**: the value type and scalar text codec are constexpr; the formatter reuses the
+  constexpr encode core. Generation and owning/string conversions are runtime-only by nature or by
+  their standard-library dependencies.
 - **Testing**: spec vectors, property round-trips, monotonic bursts and exhaustion,
   clock-regression fail-closed, reservation range/size contract, concurrency stress (global
   sortedness and uniqueness), TSAN on the mutex flavor, and ASAN/UBSAN everywhere.
@@ -448,7 +457,7 @@ Otherwise the build downloads the pinned v2.3.1 header automatically
 ## Repository layout
 
 ```
-ulid26/value.hpp             value layer: errors, scalar codec, ulid, parse, hash, formatter
+ulid26/value.hpp             value layer: errors, scalar codec, ulid, try_parse, hash, formatter
 ulid26/generators.hpp        generation layer: entropy engines, one-shot and monotonic generation,
                              reservations
 ulid26/ulid26.hpp            include-all umbrella over the two layers
