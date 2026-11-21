@@ -321,15 +321,23 @@ namespace ulid26 {
         constexpr inline std::size_t   kEntropyLoGroups       = 12;
         constexpr inline std::size_t   kLoTopShift            = 60;
         constexpr inline std::size_t   kLoGroupBase           = 55;
-        constexpr inline std::uint64_t kTimestampShift        = 16;
-        constexpr inline std::uint64_t kEntropyHighMask       = 0xFFFF;
+        constexpr inline std::size_t   kTimestampBits         = 48;
+        constexpr inline std::size_t   kEntropyBits           = 80;
+        constexpr inline std::size_t   kEntropyBytes          = kEntropyBits / kBitsPerByte;
+        constexpr inline std::size_t   kEntropyHiBytes        = 2;
+        constexpr inline std::uint64_t kTimestampShift        = kEntropyHiBytes * kBitsPerByte;
+        constexpr inline std::uint64_t kEntropyHighMask = (std::uint64_t{1} << kTimestampShift) - 1;
+        static_assert(
+            kTimestampBits + kEntropyBits == ulid::kBinarySize * kBitsPerByte,
+            "timestamp and entropy must fill the binary ULID"
+        );
         // MSB of the 8-bit decode table entry is set for invalid characters.
-        constexpr inline std::uint64_t kErrorChannelMask      = 0x80;
+        constexpr inline std::uint64_t kErrorChannelMask = 0x80;
         // The low 5 bits of the decode table entry are the value channel.
-        constexpr inline std::uint64_t kValueChannelMask      = 0x1F;
-        constexpr inline std::uint64_t kHashSalt              = 0x9E3779B97F4A7C15ULL;
-        constexpr inline std::size_t   kHashShiftLeft         = 6;
-        constexpr inline std::size_t   kHashShiftRight        = 2;
+        constexpr inline std::uint64_t kValueChannelMask = 0x1F;
+        constexpr inline std::uint64_t kHashSalt         = 0x9E3779B97F4A7C15ULL;
+        constexpr inline std::size_t   kHashShiftLeft    = 6;
+        constexpr inline std::size_t   kHashShiftRight   = 2;
 
         constexpr inline std::string_view kCrockfordAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
         static_assert(

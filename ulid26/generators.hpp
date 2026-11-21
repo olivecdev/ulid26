@@ -57,9 +57,6 @@ namespace ulid26 {
                              };
 
     namespace detail {
-        constexpr inline std::size_t   kEntropyBytes     = 10;
-        constexpr inline std::size_t   kEntropyHiBytes   = 2;
-        constexpr inline std::size_t   kTimestampBits    = 48;
         constexpr inline std::uint64_t kTimestampModulus = std::uint64_t{1} << kTimestampBits;
         constexpr inline std::uint64_t kMaxTimestamp     = kTimestampModulus - 1;
         constexpr inline std::uint64_t kMaxUint64        = ~std::uint64_t{0};
