@@ -143,7 +143,7 @@ entropy acquisition may throw if the operating system cannot provide entropy.
 enum class errc {
     invalid_length = 1,   // input is not 26 characters
     invalid_character,    // byte outside the Crockford alphabet (I/L/O/U rejected)
-    overflow,             // value exceeds 7ZZZZZZZZZZZZZZZZZZZZZZZZZ
+    overflow,             // value or clock exceeds the representable range
     time_reversed,        // monotonic: system clock stepped backwards (fail closed)
     generation_overflow,  // monotonic: entropy exhausted within one millisecond
 };
@@ -159,9 +159,16 @@ standard library, we do not interfere with that.
 ## Generation
 
 `generate()` mints exactly one id: one fresh clock read and one fresh entropy draw, with no state.
-It is safe from any thread. It's a heavy convenience API: it instantiates a generator discarded in
-the end of the scope, and draws one ID from it. Use it for one-off generation only. Do not call it
-in a loop; for more than one id, take a reservation from a generator.
+It is safe from any thread. It is a convenience API for one-off generation: do not call it in a loop;
+for more than one id, take a reservation from a generator.
+
+### Timestamp range
+
+The timestamp field is 48 bits. If the system clock reports a value beyond that range,
+`generate()` saturates the timestamp to the maximum representable value because it has no error
+channel. Monotonic generators do **not** saturate: they fail closed with `errc::overflow` instead of
+pretending an unrepresentable clock produced a valid creation time. This boundary is not reachable
+until the year 10889.
 
 
 ```cpp
@@ -181,7 +188,7 @@ This library provides two flavors of monotonic generators:
 ```cpp
 // Per-object state: zero synchronization, strictly increasing per instance. Use it when generation
 // happens via a single object never shared across threads.
-ulid26::unsynchronized_generator m;
+ulid26::unsynchronized_generator<> m;
 auto a = m.next();    // -> std::expected<ulid, std::error_code>
 auto b = m.next();    // b > a whenever the clock confirms the same or later millisecond
 
@@ -191,7 +198,7 @@ ulid26::unsynchronized_generator<ulid26::default_rng> seeded{ulid26::default_rng
 
 // Shared: all instances refer to the same global atomic state per engine type, so the sequence is
 // strictly increasing across ALL threads. Use it when you're unsure which thread generates next.
-ulid26::shared_generator g;
+ulid26::shared_generator<> g;
 auto c = g.next();
 ```
 
@@ -229,7 +236,7 @@ timestamp and a contiguous entropy window; iteration computes values on demand, 
 repeatable. It models a `std::ranges::view`, so it composes with the standard pipeline:
 
 ```cpp
-ulid26::shared_generator g;
+ulid26::shared_generator<> g;
 auto r = g.reserve(64);    // -> std::expected<reservation, std::error_code>
 if (!r)
     return r.error();
@@ -250,6 +257,10 @@ by the range, never by an oversized error; `generation_overflow` belongs to sing
 only. Copying or iterating a reservation never mints new ids: call `reserve()` again for a new
 block.
 
+`count` is capped at `INT64_MAX` because reservation iterators use a signed random-access difference
+type. Larger requests are treated as `INT64_MAX`; the actual grant is still limited by the remaining
+entropy in the current millisecond.
+
 Even if two threads reserve in the same millisecond, the blocks are disjoint and ordered across
 threads. The shared state stores the last ULID of the reserved block, not the first: once a thread
 succeeds in reserving a block, the next thread sees a strictly higher last ULID and cannot overlap.
@@ -264,12 +275,13 @@ Generators take any standard uniform random bit generator as their template para
 ulid26::unsynchronized_generator<std::mt19937_64> gen{std::mt19937_64{42}};
 ```
 
-The in-house engines are `default_rng` (`ChaCha20`, seeded once per thread from the OS; ~28ns per
-draw) and `system_rng` (`std::random_device` per draw; ~5µs, but OS-maintained and fork-safe). Two
-warnings travel with the freedom: non-cryptographic engines (`mt19937_64`, and Philox — available as
-`std::philox4x32` only under C++26) must never back ids that need unguessability, and an engine with
-a fixed default seed yields identical streams on every thread under `shared_generator` (uniqueness
-still holds — the shared counter sequences collisions — but the entropy correlates).
+The in-house engines are `default_rng` (`ChaCha20`, RFC 8439, seeded once per thread from the OS;
+~28ns per draw) and `system_rng` (`std::random_device` per draw; ~5µs, OS-maintained and
+engine-level fork-safe). Two warnings travel with the freedom: non-cryptographic engines
+(`mt19937_64`, and Philox — available as `std::philox4x32` only under C++26) must never back ids
+that need unguessability, and an engine with a fixed default seed yields identical streams on every
+thread under `shared_generator` (uniqueness still holds — the shared counter sequences collisions —
+but the entropy correlates).
 
 
 ### Thread-safety guarantees
@@ -287,6 +299,10 @@ elsewhere. Plain standard C++ doesn't guarantee lock-free atomic operations on 1
 Both implementations pass the identical test suite and are required to exhibit identical observable
 behavior (differential testing); the mutex flavor additionally validates under ThreadSanitizer.
 
+Define `ULID26_FORCE_MUTEX` at compile time to omit the CAS tier entirely. This is the escape hatch
+for ThreadSanitizer and mutex-tier testing: TSan needs the inline-asm path absent from the binary,
+not merely disabled at runtime. The `tsan` preset sets it automatically.
+
 The CAS tier takes one CAS-shaped state snapshot before its first attempt. A failed committing CAS
 reports the current state in its expected operand; the retry reuses that observation instead of
 taking another snapshot. If the state has advanced to a newer millisecond than the cached clock, the
@@ -298,12 +314,23 @@ Reservation blocks are granted in commit order and are disjoint across threads, 
 controls when it drains them. Application-level emission can therefore lag or interleave even though
 the commit order is the value order.
 
+### Fork behavior
+
+Stateful generators are not fork-safe. `fork()` copies thread-local engine state and the global
+`shared_generator` state into the child, so continuing an inherited generator in both processes can
+emit duplicate ULIDs. Reconstruct or reseed generators after `fork()`.
+
+`system_rng` itself is engine-level fork-safe because every draw asks the OS for fresh entropy, but a
+stateful generator that uses it is still inherited. The one-shot `generate<system_rng>()` path does
+not retain sequence state and is safe to use after `fork()`. `generate<default_rng>()` is not exempt:
+it reuses the inherited thread-local ChaCha state.
+
 ### Resuming after restart
 
 A monotonic sequence can continue from a persisted id:
 
 ```cpp
-ulid26::unsynchronized_generator m{last_id_from_disk};
+ulid26::unsynchronized_generator<> m{last_id_from_disk};
 ```
 
 ## Text codec
@@ -398,8 +425,8 @@ Reservation + drain, ns/ULID:
 
 Reservations reduce the committing synchronization to one event per block; draining the returned
 range is local and needs no further calls. The text codec is scalar throughout: direct shifts per
-5-bit group on encode, table loop plus range cap on decode. The scalar `constexpr` codec doubles as
-the reference for the codec differential tests.
+5-bit group on encode, table loop plus range cap on decode. The same scalar `constexpr` core is
+exercised at compile time and runtime; there is no separate optimized codec to drift from it.
 
 ## Spec conformance
 
@@ -452,7 +479,8 @@ Otherwise the build downloads the pinned v2.3.1 header automatically
   their standard-library dependencies.
 - **Testing**: spec vectors, property round-trips, monotonic bursts and exhaustion,
   clock-regression fail-closed, reservation range/size contract, concurrency stress (global
-  sortedness and uniqueness), TSAN on the mutex flavor, and ASAN/UBSAN everywhere.
+  sortedness and uniqueness), the RFC 8439 ChaCha20 block vector, TSAN on the mutex flavor, and
+  ASAN/UBSAN everywhere.
 
 ## Repository layout
 

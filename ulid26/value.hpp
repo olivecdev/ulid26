@@ -55,7 +55,7 @@ namespace ulid26 {
     enum class errc : std::int8_t {
         invalid_length = 1, // text input is not 26 characters
         invalid_character,  // byte outside the Crockford base32 alphabet
-        overflow,           // decoded value exceeds 7ZZZZZZZZZZZZZZZZZZZZZZZZZ
+        overflow,           // value or clock exceeds the representable range
         time_reversed,      // monotonic generator: the clock stepped backwards
         generation_overflow // monotonic generator: entropy exhausted in one ms
     };
@@ -173,7 +173,7 @@ namespace ulid26 {
             // This would be impossible without the templated attorney or passkey idioms: a partial
             // template specialization cannot be declared friend and we didn't want to write
             // manually every possible full specialization of the formatter.
-            friend class std::formatter<ulid, CharT>;
+            friend struct std::formatter<ulid, CharT>;
             friend constexpr std::expected<ulid, errc>
             try_parse<>(std::basic_string_view<CharT> text) noexcept;
             // The enclosing value type itself: to_chars delegates to the unchecked
@@ -272,7 +272,7 @@ namespace ulid26 {
             case errc::invalid_character:
                 return "ulid: character outside of the Crockford base32 range";
             case errc::overflow:
-                return "ulid: value overflows the 128-bit range";
+                return "ulid: value or clock exceeds the representable range";
             case errc::time_reversed:
                 return "ulid: system clock stepped backwards";
             case errc::generation_overflow:

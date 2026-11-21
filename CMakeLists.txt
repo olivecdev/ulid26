@@ -23,6 +23,7 @@ project(
 option(ULID26_BUILD_TESTS "Build ulid26 tests" ${PROJECT_IS_TOP_LEVEL})
 option(ULID26_BUILD_BENCHMARKS "Build ulid26 benchmarks" OFF)
 option(ULID26_BUILD_FUZZ "Build ulid26 fuzz harness (Clang + libFuzzer only)" OFF)
+option(ULID26_FORCE_MUTEX "Compile only the mutex tier (for ThreadSanitizer)" OFF)
 
 # Single target, all headers: this is a small header-only library, so one target installs everything
 # and every consumer links the same thing. Compile-time granularity lives in the headers, not the
@@ -39,6 +40,9 @@ target_sources(ulid26
         ulid26/value.hpp
 )
 target_compile_features(ulid26 INTERFACE cxx_std_23)
+if(ULID26_FORCE_MUTEX)
+    target_compile_definitions(ulid26 INTERFACE ULID26_FORCE_MUTEX=1)
+endif()
 
 include(GNUInstallDirs)
 

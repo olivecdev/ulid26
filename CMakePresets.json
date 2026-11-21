@@ -62,13 +62,14 @@
     {
       "name": "tsan",
       "displayName": "ThreadSanitizer",
-      "description": "Debug + TSan for the test suite (GCC/Clang only). Both tiers run; only the mutex tier validates the commit protocol — TSan cannot see the inline-asm CAS tier, so that run checks the harness and atomics only.",
+      "description": "Debug + TSan for the mutex tier (GCC/Clang only). The preset defines ULID26_FORCE_MUTEX, so the inline-asm CAS tier is not compiled.",
       "inherits": "base",
       "generator": "Ninja",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
-        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread"
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread",
+        "ULID26_FORCE_MUTEX": "ON"
       }
     },
     {

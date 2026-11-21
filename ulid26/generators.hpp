@@ -32,6 +32,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <expected>
+#include <limits>
 #include <mutex>
 #include <random>
 #include <ranges>
@@ -60,20 +61,22 @@ namespace ulid26 {
         constexpr inline std::uint64_t kTimestampModulus = std::uint64_t{1} << kTimestampBits;
         constexpr inline std::uint64_t kMaxTimestamp     = kTimestampModulus - 1;
         constexpr inline std::uint64_t kMaxUint64        = ~std::uint64_t{0};
-        constexpr inline std::size_t   kChaChaBlockBytes = 64;
-        constexpr inline std::size_t   kStateWords       = 16;
-        constexpr inline std::size_t   kDoubleRounds     = 10;
-        constexpr inline std::size_t   kKeyWords         = 8;
-        constexpr inline std::size_t   kNonceWords       = 3;
-        constexpr inline std::size_t   kKeyOffset        = 4;
-        constexpr inline std::size_t   kCounterIndex     = 12;
-        constexpr inline std::size_t   kNonceOffset      = 13;
-        constexpr inline std::size_t   kBytesPerWord     = 4;
-        constexpr inline std::size_t   kDeviceWordBits   = 32;
-        constexpr inline int           kRot16            = 16;
-        constexpr inline int           kRot12            = 12;
-        constexpr inline int           kRot8             = 8;
-        constexpr inline int           kRot7             = 7;
+        constexpr inline std::uint64_t kMaxReservationCount =
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+        constexpr inline std::size_t kChaChaBlockBytes = 64;
+        constexpr inline std::size_t kStateWords       = 16;
+        constexpr inline std::size_t kDoubleRounds     = 10;
+        constexpr inline std::size_t kKeyWords         = 8;
+        constexpr inline std::size_t kNonceWords       = 3;
+        constexpr inline std::size_t kKeyOffset        = 4;
+        constexpr inline std::size_t kCounterIndex     = 12;
+        constexpr inline std::size_t kNonceOffset      = 13;
+        constexpr inline std::size_t kBytesPerWord     = 4;
+        constexpr inline std::size_t kDeviceWordBits   = 32;
+        constexpr inline int         kRot16            = 16;
+        constexpr inline int         kRot12            = 12;
+        constexpr inline int         kRot8             = 8;
+        constexpr inline int         kRot7             = 7;
 
         // NOLINTBEGIN(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
         // ChaCha20 sigma constants, "expand 32-byte k" little-endian (RFC 8439 §2.3).
@@ -82,6 +85,60 @@ namespace ulid26 {
         };
 
         // NOLINTEND(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
+
+        // The ChaCha20 block function from RFC 8439 section 2.3. The input is
+        // constants | key | counter | nonce; the result already includes the
+        // final addition of the input state.
+        [[nodiscard]]
+        constexpr std::array<std::uint32_t, kStateWords>
+        chacha20_block(std::array<std::uint32_t, kStateWords> const& input) noexcept {
+            auto       working = input;
+            auto&      s00     = working.at(0);
+            auto&      s01     = working.at(1);
+            auto&      s02     = working.at(2);
+            auto&      s03     = working.at(3);
+            auto&      s04     = working.at(4);
+            auto&      s05     = working.at(5);
+            auto&      s06     = working.at(6);
+            auto&      s07     = working.at(7);
+            auto&      s08     = working.at(8);
+            auto&      s09     = working.at(9);
+            auto&      s10     = working.at(10);
+            auto&      s11     = working.at(11);
+            auto&      s12     = working.at(12);
+            auto&      s13     = working.at(13);
+            auto&      s14     = working.at(14);
+            auto&      s15     = working.at(15);
+            auto const quarter = [](std::uint32_t& first, std::uint32_t& second,
+                                    std::uint32_t& third, std::uint32_t& fourth) {
+                first  += second;
+                fourth ^= first;
+                fourth  = std::rotl(fourth, kRot16);
+                third  += fourth;
+                second ^= third;
+                second  = std::rotl(second, kRot12);
+                first  += second;
+                fourth ^= first;
+                fourth  = std::rotl(fourth, kRot8);
+                third  += fourth;
+                second ^= third;
+                second  = std::rotl(second, kRot7);
+            };
+            for (std::size_t round = 0; round < kDoubleRounds; ++round) {
+                quarter(s00, s04, s08, s12);
+                quarter(s01, s05, s09, s13);
+                quarter(s02, s06, s10, s14);
+                quarter(s03, s07, s11, s15);
+                quarter(s00, s05, s10, s15);
+                quarter(s01, s06, s11, s12);
+                quarter(s02, s07, s08, s13);
+                quarter(s03, s04, s09, s14);
+            }
+            for (std::size_t word = 0; word < kStateWords; ++word) {
+                working.at(word) += input.at(word);
+            }
+            return working;
+        }
 
         [[nodiscard]]
         constexpr std::uint64_t byte_value(std::byte octet) noexcept {
@@ -227,7 +284,26 @@ namespace ulid26 {
             return std::min(count, available);
         }
 
-#if defined(__x86_64__) && defined(__GNUC__) && !defined(__clang__) &&                             \
+#if defined(ULID26_FORCE_MUTEX)
+        // Compile-time escape hatch for ThreadSanitizer and mutex-tier validation.
+        // Define ULID26_FORCE_MUTEX to omit the CAS tier entirely.
+        constexpr inline bool kHasCas128 = false;
+
+        [[nodiscard]]
+        inline bool cpu_has_cas128() noexcept {
+            return false;
+        }
+
+        inline void pause_hint() noexcept {}
+
+        // Unreachable stub: discarded if-constexpr branches still name cas_state.
+        inline bool cas_state(state volatile* ptr, state& expected, state desired) noexcept {
+            static_cast<void>(ptr);
+            static_cast<void>(expected);
+            static_cast<void>(desired);
+            std::abort();
+        }
+#elif defined(__x86_64__) && defined(__GNUC__) && !defined(__clang__) &&                           \
     defined(__GCC_ASM_FLAG_OUTPUTS__)
         constexpr inline bool kHasCas128 = true;
 
@@ -254,10 +330,6 @@ namespace ulid26 {
         [[nodiscard]]
         inline bool cpu_has_cas128() {
             static bool const supported = [] {
-                if (std::getenv("ULID26_NO_CAS128") != nullptr) {
-                    // Escape hatch for ThreadSanitizer and tier-differential runs.
-                    return false;
-                }
                 __builtin_cpu_init();
                 return __builtin_cpu_supports("cmpxchg16b") != 0;
             }();
@@ -286,13 +358,7 @@ namespace ulid26 {
 
         [[nodiscard]]
         inline bool cpu_has_cas128() {
-            static bool const supported = [] {
-                if (std::getenv("ULID26_NO_CAS128") != nullptr) {
-                    return false;
-                }
-                return true;
-            }();
-            return supported;
+            return true;
         }
 
         inline void pause_hint() noexcept { _mm_pause(); }
@@ -442,58 +508,11 @@ namespace ulid26 {
         }
 
       private:
-        // NOLINTBEGIN(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
         void refill() {
-            auto       working = state_;
-            auto&      s00     = working.at(0);
-            auto&      s01     = working.at(1);
-            auto&      s02     = working.at(2);
-            auto&      s03     = working.at(3);
-            auto&      s04     = working.at(4);
-            auto&      s05     = working.at(5);
-            auto&      s06     = working.at(6);
-            auto&      s07     = working.at(7);
-            auto&      s08     = working.at(8);
-            auto&      s09     = working.at(9);
-            auto&      s10     = working.at(10);
-            auto&      s11     = working.at(11);
-            auto&      s12     = working.at(12);
-            auto&      s13     = working.at(13);
-            auto&      s14     = working.at(14);
-            auto&      s15     = working.at(15);
-            auto const quarter = [](std::uint32_t& first, std::uint32_t& second,
-                                    std::uint32_t& third, std::uint32_t& fourth) {
-                first  += second;
-                fourth ^= first;
-                fourth  = std::rotl(fourth, detail::kRot16);
-                third  += fourth;
-                second ^= third;
-                second  = std::rotl(second, detail::kRot12);
-                first  += second;
-                fourth ^= first;
-                fourth  = std::rotl(fourth, detail::kRot8);
-                third  += fourth;
-                second ^= third;
-                second  = std::rotl(second, detail::kRot7);
-            };
-            for (std::size_t round = 0; round < detail::kDoubleRounds; ++round) {
-                quarter(s00, s04, s08, s12);
-                quarter(s01, s05, s09, s13);
-                quarter(s02, s06, s10, s14);
-                quarter(s03, s07, s11, s15);
-                quarter(s00, s05, s10, s15);
-                quarter(s01, s06, s11, s12);
-                quarter(s02, s07, s08, s13);
-                quarter(s03, s04, s09, s14);
-            }
-            for (std::size_t word = 0; word < detail::kStateWords; ++word) {
-                keystream_.at(word) = working.at(word) + state_.at(word);
-            }
+            keystream_ = detail::chacha20_block(state_);
             ++state_.at(detail::kCounterIndex);
             position_ = 0;
         }
-
-        // NOLINTEND(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
 
         std::array<std::uint32_t, detail::kStateWords> state_{};
         std::array<std::uint32_t, detail::kStateWords> keystream_{};
@@ -682,7 +701,7 @@ namespace ulid26 {
     // One-shot generation with a fresh timestamp and fresh entropy. Safe to call
     // from any thread (entropy is thread-local). Throws only if the OS provides
     // no entropy on first use in a thread; timestamps outside the 48-bit range
-    // clamp instead of failing. For more than one id, use a generator
+    // saturate instead of failing. For more than one id, use a generator
     // reservation rather than calling this in a loop.
     template <entropy_engine R = default_rng>
     [[nodiscard]]
@@ -761,11 +780,13 @@ namespace ulid26 {
         // Best-effort reservation: grants between 0 and count ids, all within
         // one millisecond. Fails only for time_reversed (or an unrepresentable
         // clock). A short or empty result is success: size() reports the grant.
+        // count is capped at INT64_MAX because reservation iterators use a signed difference type.
         [[nodiscard]]
         std::expected<reservation, std::error_code> reserve(std::uint64_t count) {
             if (count == 0) {
                 return reservation{};
             }
+            count                   = std::min(count, detail::kMaxReservationCount);
             std::uint64_t const now = detail::clock_ms();
             auto const          decision =
                 detail::decide_advance(detail::parts{.hi = ts_hi_, .lo = lo_}, now);
@@ -822,11 +843,13 @@ namespace ulid26 {
         // Best-effort reservation: grants between 0 and count ids, all within
         // one millisecond, disjoint from every other reservation. Fails only
         // for time_reversed (or an unrepresentable clock).
+        // count is capped at INT64_MAX because reservation iterators use a signed difference type.
         [[nodiscard]]
         std::expected<reservation, std::error_code> reserve(std::uint64_t count) {
             if (count == 0) {
                 return reservation{};
             }
+            count        = std::min(count, detail::kMaxReservationCount);
             auto& shared = detail::global_shared_state<R>();
             if constexpr (detail::kHasCas128) {
                 if (use_cas_) {

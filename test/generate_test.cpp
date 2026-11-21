@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <ranges>
 #include <span>
 #include <thread>
@@ -88,9 +89,37 @@ int main() {
         }
     };
 
+    "RFC 8439 ChaCha20 block vector"_test = [] {
+        constexpr std::array<std::uint32_t, 16> input = {
+            0x61707865U, 0x3320646EU, 0x79622D32U, 0x6B206574U, 0x03020100U, 0x07060504U,
+            0x0B0A0908U, 0x0F0E0D0CU, 0x13121110U, 0x17161514U, 0x1B1A1918U, 0x1F1E1D1CU,
+            0x00000001U, 0x09000000U, 0x4A000000U, 0x00000000U,
+        };
+        constexpr std::array<std::uint32_t, 16> expected = {
+            0xE4E7F110U, 0x15593BD1U, 0x1FDD0F50U, 0xC47120A3U, 0xC7F4D1C7U, 0x0368C033U,
+            0x9AAA2204U, 0x4E6CD4C3U, 0x466482D2U, 0x09AA9F07U, 0x05D7C214U, 0xA2028BD9U,
+            0xD19C12B5U, 0xB94E16DEU, 0xE883D0CBU, 0x4E3C50A2U,
+        };
+        expect(ulid26::detail::chacha20_block(input) == expected)
+            << "RFC 8439 section 2.3.2 block vector";
+    };
+
+    "reservation count is capped at int64 max"_test = [] {
+        constexpr std::uint64_t kCap =
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+        ulid26::unsynchronized_generator<> generator;
+        auto const block = generator.reserve(std::numeric_limits<std::uint64_t>::max());
+        expect(block.has_value()) << "oversized request still succeeds";
+        if (block) {
+            expect(block->size() == kCap) << "grant is capped";
+            expect(block->end() - block->begin() == std::numeric_limits<std::int64_t>::max())
+                << "range difference is representable";
+        }
+    };
+
     "local burst is strictly increasing"_test = [] {
-        ulid26::unsynchronized_generator generator;
-        auto const                       first = generator.next();
+        ulid26::unsynchronized_generator<> generator;
+        auto const                         first = generator.next();
         expect(first.has_value()) << "first id";
         if (!first) {
             return;
@@ -112,9 +141,9 @@ int main() {
         bool          observed  = false;
         for (int attempt = 0; attempt < kAttempts && !observed; ++attempt) {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
-            auto const                       now = ulid26::generate().timestamp();
-            ulid26::unsynchronized_generator generator{make_ulid(now, kHighMask, kEntropyMax)};
-            auto const                       single = generator.next();
+            auto const                         now = ulid26::generate().timestamp();
+            ulid26::unsynchronized_generator<> generator{make_ulid(now, kHighMask, kEntropyMax)};
+            auto const                         single = generator.next();
             if (!single) {
                 if (single.error() != ulid26::make_error_code(ulid26::errc::generation_overflow)) {
                     expect(false) << "unexpected next() error";
@@ -138,8 +167,8 @@ int main() {
         bool                    observed   = false;
         for (int attempt = 0; attempt < kAttempts && !observed; ++attempt) {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
-            auto const                       now = ulid26::generate().timestamp();
-            ulid26::unsynchronized_generator generator{
+            auto const                         now = ulid26::generate().timestamp();
+            ulid26::unsynchronized_generator<> generator{
                 make_ulid(now, kHighMask, kEntropyMax - kGranted)
             };
             auto const block = generator.reserve(kRequested);
@@ -168,9 +197,9 @@ int main() {
     };
 
     "reservation range contract"_test = [] {
-        ulid26::unsynchronized_generator generator;
-        constexpr std::uint64_t          kCount = 64;
-        auto const                       block  = generator.reserve(kCount);
+        ulid26::unsynchronized_generator<> generator;
+        constexpr std::uint64_t            kCount = 64;
+        auto const                         block  = generator.reserve(kCount);
         expect(block.has_value()) << "reservation succeeds";
         if (!block) {
             return;
@@ -203,8 +232,8 @@ int main() {
     };
 
     "reservation random access"_test = [] {
-        ulid26::unsynchronized_generator generator;
-        auto const                       block = generator.reserve(8);
+        ulid26::unsynchronized_generator<> generator;
+        auto const                         block = generator.reserve(8);
         expect(block.has_value()) << "reservation succeeds";
         if (!block || block->size() != 8U) {
             return;
@@ -227,22 +256,22 @@ int main() {
     };
 
     "moving a generator re-seeds the source"_test = [] {
-        ulid26::unsynchronized_generator source;
-        auto const                       first = source.next();
+        ulid26::unsynchronized_generator<> source;
+        auto const                         first = source.next();
         expect(first.has_value()) << "source generates";
         if (!first) {
             return;
         }
-        ulid26::unsynchronized_generator destination{std::move(source)};
-        auto const                       second = destination.next();
+        ulid26::unsynchronized_generator<> destination{std::move(source)};
+        auto const                         second = destination.next();
         expect(second.has_value() && *second > *first) << "destination continues the sequence";
         auto const third = source.next();
         expect(third.has_value()) << "moved-from generator reseeds";
     };
 
     "reservation composes with views"_test = [] {
-        ulid26::unsynchronized_generator generator;
-        auto const                       block = generator.reserve(16);
+        ulid26::unsynchronized_generator<> generator;
+        auto const                         block = generator.reserve(16);
         expect(block.has_value()) << "reservation succeeds";
         if (!block || block->size() < 4U) {
             return;
@@ -257,8 +286,8 @@ int main() {
     };
 
     "zero reservation is empty success"_test = [] {
-        ulid26::unsynchronized_generator generator;
-        auto const                       block = generator.reserve(0);
+        ulid26::unsynchronized_generator<> generator;
+        auto const                         block = generator.reserve(0);
         expect(block.has_value()) << "zero is not an error";
         if (block) {
             expect(block->empty()) << "zero-sized block";
@@ -274,8 +303,8 @@ int main() {
         if (!future) {
             return;
         }
-        ulid26::unsynchronized_generator generator{*future};
-        auto const                       single = generator.next();
+        ulid26::unsynchronized_generator<> generator{*future};
+        auto const                         single = generator.next();
         expect(!single.has_value()) << "single-value generation fails";
         if (!single) {
             expect(single.error() == ulid26::make_error_code(ulid26::errc::time_reversed))
@@ -297,8 +326,8 @@ int main() {
         threads.reserve(kThreads);
         for (std::size_t thread = 0; thread < kThreads; ++thread) {
             threads.emplace_back([&output, thread] {
-                ulid26::shared_generator generator;
-                auto const               block = generator.reserve(kPerThread);
+                ulid26::shared_generator<> generator;
+                auto const                 block = generator.reserve(kPerThread);
                 if (!block) {
                     return;
                 }
@@ -322,10 +351,10 @@ int main() {
     };
 
     "shared handles share one sequence"_test = [] {
-        ulid26::shared_generator left;
-        ulid26::shared_generator right;
-        auto const               first  = left.reserve(1);
-        auto const               second = right.reserve(1);
+        ulid26::shared_generator<> left;
+        ulid26::shared_generator<> right;
+        auto const                 first  = left.reserve(1);
+        auto const                 second = right.reserve(1);
         expect(first.has_value() && second.has_value()) << "both reservations succeed";
         if (first && second && !first->empty() && !second->empty()) {
             expect(first->last() < second->first()) << "separate handles advance one sequence";
@@ -333,10 +362,10 @@ int main() {
     };
 
     "shared next shares one sequence"_test = [] {
-        ulid26::shared_generator left;
-        ulid26::shared_generator right;
-        auto const               first  = left.next();
-        auto const               second = right.next();
+        ulid26::shared_generator<> left;
+        ulid26::shared_generator<> right;
+        auto const                 first  = left.next();
+        auto const                 second = right.next();
         expect(first.has_value() && second.has_value()) << "both single ids succeed";
         if (first && second) {
             expect(*first < *second) << "separate handles advance one sequence";
