@@ -809,14 +809,13 @@ namespace ulid26 {
         // A single id. For more than one, reserve() rather than looping this.
         [[nodiscard]]
         std::expected<ulid, std::error_code> next() {
-            auto block = reserve(1);
-            if (!block) {
-                return std::unexpected(block.error());
+            auto& shared = detail::global_shared_state<R>();
+            if constexpr (detail::kHasCas128) {
+                if (use_cas_) {
+                    return next_cas(shared);
+                }
             }
-            if (block->empty()) {
-                return std::unexpected(make_error_code(errc::generation_overflow));
-            }
-            return block->first();
+            return next_locked(shared);
         }
 
         // Best-effort reservation: grants between 0 and count ids, all within
@@ -827,21 +826,64 @@ namespace ulid26 {
             if (count == 0) {
                 return reservation{};
             }
-            auto& state = detail::global_shared_state<R>();
+            auto& shared = detail::global_shared_state<R>();
             if constexpr (detail::kHasCas128) {
-                if (detail::cpu_has_cas128()) {
-                    return reserve_cas(state, count);
+                if (use_cas_) {
+                    return reserve_cas(shared, count);
                 }
             }
-            return reserve_locked(state, count);
+            return reserve_locked(shared, count);
         }
 
       private:
         [[nodiscard]]
+        static std::expected<ulid, std::error_code> next_cas(detail::shared_state<R>& shared) {
+            std::uint64_t now = detail::clock_ms();
+            for (;;) {
+                detail::state observed{};
+                detail::cas_state(&shared.data, observed, observed);
+                auto decision = detail::decide_advance(observed.ts_hi, observed.lo, now);
+                if (!decision) {
+                    now      = detail::clock_ms();
+                    decision = detail::decide_advance(observed.ts_hi, observed.lo, now);
+                    if (!decision) {
+                        return std::unexpected(make_error_code(decision.error()));
+                    }
+                }
+
+                detail::state const first =
+                    decision->fresh ?
+                        detail::fresh_reservation_start<R>(now, 1) :
+                        detail::state{.ts_hi = decision->next_hi, .lo = decision->next_lo};
+                if (detail::cas_state(&shared.data, observed, first)) {
+                    return detail::assemble_ulid(first.ts_hi, first.lo);
+                }
+                detail::pause_hint();
+            }
+        }
+
+        [[nodiscard]]
+        static std::expected<ulid, std::error_code> next_locked(detail::shared_state<R>& shared) {
+            std::scoped_lock const lock{shared.mutex};
+            std::uint64_t const    now = detail::clock_ms();
+            auto const decision = detail::decide_advance(shared.data.ts_hi, shared.data.lo, now);
+            if (!decision) {
+                return std::unexpected(make_error_code(decision.error()));
+            }
+
+            detail::state const first =
+                decision->fresh ?
+                    detail::fresh_reservation_start<R>(now, 1) :
+                    detail::state{.ts_hi = decision->next_hi, .lo = decision->next_lo};
+            shared.data = first;
+            return detail::assemble_ulid(first.ts_hi, first.lo);
+        }
+
+        [[nodiscard]]
         static std::expected<reservation, std::error_code>
         reserve_cas(detail::shared_state<R>& shared, std::uint64_t count) {
+            std::uint64_t now = detail::clock_ms();
             for (;;) {
-                std::uint64_t now = detail::clock_ms();
                 detail::state observed{};
                 detail::cas_state(&shared.data, observed, observed);
                 auto decision = detail::decide_advance(observed.ts_hi, observed.lo, now);
@@ -908,6 +950,8 @@ namespace ulid26 {
             shared.data = detail::offset_state(first_hi, first_lo, granted - 1);
             return detail::reservation_access::make(first_hi, first_lo, granted);
         }
+
+        bool use_cas_ = detail::cpu_has_cas128();
     };
 
 } // namespace ulid26

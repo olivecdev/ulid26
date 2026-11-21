@@ -331,6 +331,24 @@ int main() {
             expect(first->last() < second->first()) << "separate handles advance one sequence";
         }
     };
+
+    "shared next shares one sequence"_test = [] {
+        ulid26::shared_generator left;
+        ulid26::shared_generator right;
+        auto const               first  = left.next();
+        auto const               second = right.next();
+        expect(first.has_value() && second.has_value()) << "both single ids succeed";
+        if (first && second) {
+            expect(*first < *second) << "separate handles advance one sequence";
+        }
+
+        auto const block = left.reserve(4);
+        auto const after = right.next();
+        expect(block.has_value() && after.has_value()) << "mixed calls succeed";
+        if (block && after && !block->empty()) {
+            expect(block->last() < *after) << "next continues after a reservation";
+        }
+    };
 }
 
 // NOLINTEND(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)

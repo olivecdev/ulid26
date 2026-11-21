@@ -33,6 +33,13 @@ endif()
 # by construction instead.
 add_executable(bench_is_valid bench_is_valid.cpp)
 target_link_libraries(bench_is_valid PRIVATE ulid26 benchmark::benchmark)
+if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    target_include_directories(bench_is_valid PRIVATE ${suyash_ulid_SOURCE_DIR}/src)
+    target_compile_definitions(bench_is_valid PRIVATE ULID26_HAVE_SUYASH)
+endif()
+
+add_executable(bench_generation bench_generation.cpp)
+target_link_libraries(bench_generation PRIVATE ulid26 benchmark::benchmark)
 
 add_executable(bench_to_chars bench_to_chars.cpp)
 target_link_libraries(bench_to_chars PRIVATE ulid26 benchmark::benchmark)

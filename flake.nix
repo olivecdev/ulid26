@@ -53,7 +53,7 @@
             ${cmakePackageEnv}
             # Style gate first: fail fast before compiling.
             set -euo pipefail
-            clang-format --dry-run --Werror ulid26/ulid26.hpp ulid26/value.hpp ulid26/generators.hpp test/value_test.cpp test/generate_test.cpp bench/bench_bytes.cpp bench/bench_is_valid.cpp bench/bench_streams.cpp bench/bench_to_chars.cpp fuzz/fuzz_text.cpp
+            clang-format --dry-run --Werror ulid26/ulid26.hpp ulid26/value.hpp ulid26/generators.hpp test/value_test.cpp test/generate_test.cpp bench/bench_bytes.cpp bench/bench_generation.cpp bench/bench_is_valid.cpp bench/bench_streams.cpp bench/bench_to_chars.cpp fuzz/fuzz_text.cpp
             # Release configure, build, test, package: mirrors production.
             cmake --workflow --preset ci
           '';
@@ -91,7 +91,7 @@
           bench = ''
             ${ccEnv}
             # Release benchmark matrix: configure + build through the bench
-            # preset, then the four suites in session order with the blessed
+            # preset, then the five suites in session order with the blessed
             # defaults (ten repetitions, aggregates only). Extra arguments
             # forward to every binary, so filters and repetition overrides
             # apply matrix-wide; benchmark flags are last-wins. CPU pinning
@@ -104,6 +104,7 @@
               pin=(taskset -c "$cpu")
             fi
             flags=(--benchmark_repetitions=10 --benchmark_report_aggregates_only=true "$@")
+            "''${pin[@]}" ./build/bench/bench/bench_generation "''${flags[@]}"
             "''${pin[@]}" ./build/bench/bench/bench_is_valid "''${flags[@]}"
             "''${pin[@]}" ./build/bench/bench/bench_to_chars "''${flags[@]}"
             "''${pin[@]}" ./build/bench/bench/bench_bytes "''${flags[@]}"
