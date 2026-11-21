@@ -839,9 +839,9 @@ namespace ulid26 {
         [[nodiscard]]
         static std::expected<ulid, std::error_code> next_cas(detail::shared_state<R>& shared) {
             std::uint64_t now = detail::clock_ms();
+            detail::state observed{};
+            detail::cas_state(&shared.data, observed, observed);
             for (;;) {
-                detail::state observed{};
-                detail::cas_state(&shared.data, observed, observed);
                 auto decision = detail::decide_advance(observed.ts_hi, observed.lo, now);
                 if (!decision) {
                     now      = detail::clock_ms();
@@ -883,9 +883,9 @@ namespace ulid26 {
         static std::expected<reservation, std::error_code>
         reserve_cas(detail::shared_state<R>& shared, std::uint64_t count) {
             std::uint64_t now = detail::clock_ms();
+            detail::state observed{};
+            detail::cas_state(&shared.data, observed, observed);
             for (;;) {
-                detail::state observed{};
-                detail::cas_state(&shared.data, observed, observed);
                 auto decision = detail::decide_advance(observed.ts_hi, observed.lo, now);
                 if (!decision) {
                     now      = detail::clock_ms();

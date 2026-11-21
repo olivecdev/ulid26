@@ -8,10 +8,8 @@ A spec-exact, thread-safe, constexpr-friendly implementation of the
 header-only. Entropy engines may throw while acquiring OS entropy.
 
 ```
-C++23 | GCC 14+ | header-only | zero deps | constexpr | benchmarked
+C++23 |  header-only | zero deps | constexpr
 ```
-
-> Part of the [olivec](https://olivec.dev) family of independent C++ libraries.
 
 ```cpp
 ulid26::ulid id = ulid26::generate();
@@ -46,31 +44,9 @@ millisecond timestamp** and **80 bits of entropy** into 128 bits, canonically en
 |---|---|
 | Compilers | GCC 14+ (primary, incl. CAS tier; CI runs GCC 16) · Clang 22+ (mutex tier) · MSVC 19.36+ / VS 2022 17.6+ (CAS tier on x64, mutex elsewhere; Windows CI) · MinGW-w64 GCC 14+ (CAS tier expected; not run here) · floor validated by the `ci` workflow on bare ubuntu-24.04 + GCC 14 (`baseline` job) |
 | Standard | C++23 (`-std=c++23`; MSVC maps it to `/std:c++latest`) |
-| Windows | `cmake -S . -B build/win -G "Visual Studio 17 2022" -A x64` (presets pin Ninja); `bench_reference` is excluded there — the reference needs `__int128` |
+| Windows | `cmake -S . -B build/win -G "Visual Studio 17 2022" -A x64` (presets pin Ninja); reference comparisons are excluded there — suyash/ulid needs `__int128` |
 | Dependencies | none |
 | Link model | header-only; single CMake target `ulid26::ulid26`, all headers installed |
-
-## Development
-
-CI workflows run through flake apps — the command below is exactly what CI runs, so
-local and remote never drift — except `baseline` (apt toolchain) and the coverage
-merge (pip gcovr), which need no Nix. Run from the repo root:
-
-| workflow | command | what it does |
-|---|---|---|
-| `ci` | `nix run .#ci` | clang-format gate, then Release configure, build, test, package |
-| `san` | `nix run .#san` | ASan/UBSan suite |
-| `tsan` | `nix run .#tsan` | TSan suite |
-| `cov` | `nix run .#cov` | gcov suite plus the Linux tracefile |
-| `fuzz` | `nix run .#fuzz` | libFuzzer harness plus the deterministic seed-corpus gate |
-| `bench` | `nix run .#bench` | Release benchmark matrix (ten repetitions, aggregates only; extra args forward to every suite; `ULID26_BENCH_CPU` pins CPUs, default 2, empty means unpinned) |
-
-`nix develop` drops into the interactive shell carrying the same toolchain.
-
-The test suite needs boost-ext/ut: `nix develop` provides it (nixpkgs `ut`);
-Debian trixie+ ships `libboost-ext-ut-dev`, Conan has `boost-ext-ut/2.3.1`.
-Otherwise the build downloads the pinned v2.3.1 header automatically
-(network required) — or pass `-DULID26_BUILD_TESTS=OFF` to skip the suite.
 
 ## Quick start
 
@@ -136,13 +112,12 @@ public:
 
 Default construction produces the nil value — compare with `u == ulid26::ulid{}`.
 
-The value type and scalar codec are `constexpr`: the library ships
-`static_assert`-driven specification tests, including round-trip proofs and malformed-input
-rejection, evaluated at compile time. The public `from_string`/`from_bytes` wrap the scalar core to
-produce `std::error_code`, which is not constexpr-constructible, so the compile-time entries are
-separate names: `is_valid` answers validity of a literal, and `parse` parses one into a value,
-reporting the same precise `errc` the runtime API maps to `std::error_code` (`from_string` cannot
-overload on return type alone).
+The value type and scalar codec are `constexpr`: the library ships `static_assert`-driven
+specification tests, including round-trip proofs and malformed-input rejection, evaluated at compile
+time. The public `from_string`/`from_bytes` wrap the scalar core to produce `std::error_code`, which
+is not constexpr-constructible, so the compile-time entries are separate names: `is_valid` answers
+validity of a literal, and `parse` parses one into a value, reporting the same precise `errc` the
+runtime API maps to `std::error_code` (`from_string` cannot overload on return type alone).
 
 ```cpp
 static_assert(ulid26::is_valid("7ZZZZZZZZZZZZZZZZZZZZZZZZZ"));
@@ -177,13 +152,16 @@ template<> struct std::is_error_code_enum<ulid26::errc> : std::true_type {};
 ```
 
 Errors are recoverable by design: on generation failure, generator state is untouched.
-Entropy-source failures are construction or draw failures and are propagated as exceptions.
+Entropy-source failures are construction or draw failures and are propagated as exceptions by the
+standard library, we do not interfere with that.
 
 ## Generation
 
 `generate()` mints exactly one id: one fresh clock read and one fresh entropy draw, with no state.
-It is safe from any thread. Do not call it in a loop; for more than one id, take a reservation from
-a generator.
+It is safe from any thread. It's a heavy convenience API: it instantiates a generator discarded in
+the end of the scope, and draws one ID from it. Use it for one-off generation only. Do not call it
+in a loop; for more than one id, take a reservation from a generator.
+
 
 ```cpp
 ulid26::ulid id = ulid26::generate();
@@ -194,9 +172,10 @@ ulid26::ulid other = ulid26::generate<ulid26::system_rng>();
 
 ### Monotonic generators
 
-When several ULIDs are produced within the same millisecond, the monotonic generators increment the
-previous entropy by one instead of drawing fresh randomness, guaranteeing strictly increasing
-output. There are two flavors:
+The ULID spec allows a great performance optimization for bulk generation: when several ULIDs are
+produced within the same millisecond, monotonic generation may increment the previous entropy by one
+instead of drawing fresh randomness, guaranteeing strictly increasing output.
+This library provides two flavors of monotonic generators:
 
 ```cpp
 // Per-object state: zero synchronization, strictly increasing per instance. Use it when generation
@@ -214,6 +193,28 @@ ulid26::unsynchronized_generator<ulid26::default_rng> seeded{ulid26::default_rng
 ulid26::shared_generator g;
 auto c = g.next();
 ```
+
+`shared_generator` is a handle to the global sequence, not a per-thread stream. Every instance for
+the same engine type — including one constructed independently in each thread — advances the same
+sequence, so per-thread instances are safe and do not fork or partition it. You can equally share a
+single instance by reference. Fresh entropy draws stay thread-local; only the ordering state is
+shared. For independent sequences, use `unsynchronized_generator` per thread.
+
+`unsynchronized_generator` is non-copyable. Moving transfers the sequence and retires the source
+object: the moved-from generator is reset and starts a fresh, re-seeded sequence if used again.
+`shared_generator` is a stateless handle to the global state, so all instances are interchangeable.
+
+State machine (both flavors):
+
+| condition | action |
+|---|---|
+| `now > last_ts` | fresh entropy draw |
+| `now == last_ts` | increment previous entropy by 1 |
+| `now < last_ts` | fail closed: `errc::time_reversed`, state preserved |
+| entropy at maximum | `next()`: `errc::generation_overflow`; `reserve()`: empty reservation |
+
+Generators are stateful, keep them around and reuse for as long as you may need to generate more
+ids throughout the lifetime of your application.
 
 Both flavors expose `next()` for a single id and `reserve(count)` for bulk. Prefer `reserve()` for
 anything beyond one id: it reduces the committing synchronization to one event per block and gives
@@ -268,18 +269,6 @@ warnings travel with the freedom: non-cryptographic engines (`mt19937_64`, and P
 a fixed default seed yields identical streams on every thread under `shared_generator` (uniqueness
 still holds — the shared counter sequences collisions — but the entropy correlates).
 
-`unsynchronized_generator` is non-copyable. Moving transfers the sequence and retires the source
-object: the moved-from generator is reset and starts a fresh, re-seeded sequence if used again.
-`shared_generator` is a stateless handle to the global state, so all instances are interchangeable.
-
-State machine (both flavors):
-
-| condition | action |
-|---|---|
-| `now > last_ts` | fresh entropy draw |
-| `now == last_ts` | increment previous entropy by 1 |
-| `now < last_ts` | fail closed: `errc::time_reversed`, state preserved |
-| entropy at maximum | `next()`: `errc::generation_overflow`; `reserve()`: empty reservation |
 
 ### Thread-safety guarantees
 
@@ -357,47 +346,52 @@ as in `decode`.
 ## Performance
 
 Measured with the `bench/` suite (Google Benchmark, GCC 16, x86-64 Release;
-per-ULID times) on an Intel Core i5-8265U (Whiskey Lake, AVX2). Reproduce with
-`nix run .#bench` (release matrix over `bench_is_valid`, `bench_to_chars`,
-`bench_bytes` and `bench_streams`).
-Timings are data-independent: the text kernels run the full pass with no
-early exit, so valid and malformed input cost the same.
+per-operation times) on an Intel Core i5-8265U (Whiskey Lake, AVX2), pinned to
+one logical CPU with the `performance` governor and Turbo disabled (1.6 GHz).
+Reproduce with `nix run .#bench` (release matrix over `bench_generation`,
+`bench_is_valid`, `bench_to_chars`, `bench_bytes` and `bench_streams`) using
+the same CPU settings. Timings are data-independent: the text kernels run the
+full pass with no early exit, so valid and malformed input cost the same.
 
-Single-value codec numbers (ns/ULID at 100k):
+Codec numbers (ns/ULID at 100k):
 
 | operation | ours | reference |
 |---|---|---|
-| decode (validated) | 36.6 | 16.6 (validates nothing, uppercase-only) |
-| encode | 9.8 | 15.1 |
-| validate | 20.2 | N/A (no such API) |
-| compare | 1.1 | 0.9 |
-| timestamp | 0.8 | 2.5 |
-| to/from bytes | 1.7 / 5.5 | 5.7 / 8.6 |
+| decode (validated) | 45.0 | 34.7 (validates nothing, uppercase-only) |
+| encode | 23.5 | 34.7 |
+| validate | 29.6 | N/A (no such API) |
+| to/from bytes | 3.4 / 2.3 | 13.0 / 19.8 |
 
 Fairness notes: reference decode performs no validation and folds no case (lowercase input decodes
 to silent garbage), so its decode lead is the price of our spec-mandated rejection — and our
-`is_valid` (20.2ns) costs barely more than its *unchecked* decode. Everywhere else the scalar core
-matches or beats it. The two implementations agree byte-exactly on 100k random values (verified at
-benchmark setup).
+`is_valid` (29.6ns) is faster than its *unchecked* decode. Everywhere else the scalar core beats it.
+The two implementations agree byte-exactly on 100k random values (verified at benchmark setup).
 
 Accepted loss: validated decode. The gap is a contract gap, not a decoder-throughput gap: the
 reference decoder assumes 26 valid uppercase characters, while ours validates length, alphabet,
 case, range, and materializes either values or structured errors. We accept that cost rather than
-add an unchecked public decoder. The residual `compare` gap (~0.2ns, stable across repetitions) is
-not contractual either — and not worth chasing: a scratch probe of defaulted-`<=>` `<` versus an
-explicit short-circuit `<` on identical data measured the defaulted shape far faster (branchless vs
-~50% mispredicts on random data), so `operator<=> = default` already is the fast shape.
+add an unchecked public decoder.
 
 | generation | ns/op |
 |---|---|
-| `generate()` | ~72 |
-| `unsynchronized_generator::next()` | ~20 |
-| `shared_generator::next()` (uncontended) | ~32 |
+| `generate()` | 133 |
+| `unsynchronized_generator::next()` | 42.4 |
+| `shared_generator::next()` (uncontended) | 98.7 |
 
-Reservations reduce the shared committing synchronization to one event per block; draining the
-returned range is local and needs no further calls. The text codec is scalar throughout: direct
-shifts per 5-bit group on encode, table loop plus range cap on decode. The scalar `constexpr` codec
-doubles as the reference for the codec differential tests.
+Reservation + drain, ns/ULID:
+
+| block | `unsynchronized_generator` | `shared_generator` |
+|---|---|---|
+| 1 | 46.0 | 101 |
+| 16 | 4.0 | 7.4 |
+| 64 | 2.0 | 2.7 |
+| 256 | 1.5 | 1.7 |
+| 1024 | 1.3 | 1.4 |
+
+Reservations reduce the committing synchronization to one event per block; draining the returned
+range is local and needs no further calls. The text codec is scalar throughout: direct shifts per
+5-bit group on encode, table loop plus range cap on decode. The scalar `constexpr` codec doubles as
+the reference for the codec differential tests.
 
 ## Spec conformance
 
@@ -409,6 +403,28 @@ doubles as the reference for the codec differential tests.
 - **Monotonicity**: within the same millisecond the entropy is incremented with
   carrying; exhaustion fails explicitly. Across milliseconds sort order follows
   the timestamp, per spec.
+
+## Development
+
+CI workflows run through flake apps — the command below is exactly what CI runs, so
+local and remote never drift — except `baseline` (apt toolchain) and the coverage
+merge (pip gcovr), which need no Nix. Run from the repo root:
+
+| workflow | command | what it does |
+|---|---|---|
+| `ci` | `nix run .#ci` | clang-format gate, then Release configure, build, test, package |
+| `san` | `nix run .#san` | ASan/UBSan suite |
+| `tsan` | `nix run .#tsan` | TSan suite |
+| `cov` | `nix run .#cov` | gcov suite plus the Linux tracefile |
+| `fuzz` | `nix run .#fuzz` | libFuzzer harness plus the deterministic seed-corpus gate |
+| `bench` | `nix run .#bench` | Release benchmark matrix (ten repetitions, aggregates only; extra args forward to every suite; `ULID26_BENCH_CPU` pins CPUs, default 2, empty means unpinned) |
+
+`nix develop` drops into the interactive shell carrying the same toolchain.
+
+The test suite needs boost-ext/ut: `nix develop` provides it (nixpkgs `ut`);
+Debian trixie+ ships `libboost-ext-ut-dev`, Conan has `boost-ext-ut/2.3.1`.
+Otherwise the build downloads the pinned v2.3.1 header automatically
+(network required) — or pass `-DULID26_BUILD_TESTS=OFF` to skip the suite.
 
 ## Design notes
 
@@ -438,7 +454,7 @@ ulid26/generators.hpp        generation layer: entropy engines, one-shot and mon
 ulid26/ulid26.hpp            include-all umbrella over the two layers
 src/                             (nothing — header-only)
 test/                            constexpr, spec vectors, property, stress, generation/reservations
-bench/                           Google Benchmark suites for the value codec
+bench/                           Google Benchmark suites for the value codec and generation
 ```
 
 The library is deliberately composed of two headers for include-what-you-use:
