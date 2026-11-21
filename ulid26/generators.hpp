@@ -94,17 +94,20 @@ namespace ulid26 {
         struct parts {
             std::uint64_t hi = 0;
             std::uint64_t lo = 0;
+
+            friend constexpr bool operator==(parts const&, parts const&)  = default;
+            friend constexpr auto operator<=>(parts const&, parts const&) = default;
         };
 
         [[nodiscard]]
-        constexpr ulid assemble_ulid(std::uint64_t hi, std::uint64_t lo) noexcept {
+        constexpr ulid assemble_ulid(parts value) noexcept {
             std::array<std::byte, ulid::kBinarySize> bytes{};
             for (std::size_t i = 0; i < kHalfLength; ++i) {
                 bytes[i] = static_cast<std::byte>(
-                    (hi >> (kTopByteShift - (i * kBitsPerByte))) & kByteMask
+                    (value.hi >> (kTopByteShift - (i * kBitsPerByte))) & kByteMask
                 );
                 bytes[kHalfLength + i] = static_cast<std::byte>(
-                    (lo >> (kTopByteShift - (i * kBitsPerByte))) & kByteMask
+                    (value.lo >> (kTopByteShift - (i * kBitsPerByte))) & kByteMask
                 );
             }
             return ulid::from_bytes(std::span<std::byte, ulid::kBinarySize>{bytes});
@@ -150,34 +153,33 @@ namespace ulid26 {
         }
 
         // Result of the monotonic decision: either fresh entropy must be drawn
-        // (fresh == true, halves unused) or next_* already holds the successor.
+        // (fresh == true, next unused) or next already holds the successor.
         struct advance {
-            std::uint64_t next_hi = 0;
-            std::uint64_t next_lo = 0;
-            bool          fresh   = false;
+            parts next{};
+            bool  fresh = false;
         };
 
         // The decision is a pure function of the observed halves and the clock.
         [[nodiscard]]
         constexpr std::expected<advance, errc>
-        decide_advance(std::uint64_t cur_hi, std::uint64_t cur_lo, std::uint64_t now) noexcept {
+        decide_advance(parts current, std::uint64_t now) noexcept {
             if (now >= kTimestampModulus) {
                 return std::unexpected(errc::overflow);
             }
-            std::uint64_t const last_ts = cur_hi >> kTimestampShift;
+            std::uint64_t const last_ts = current.hi >> kTimestampShift;
             if (now > last_ts) {
                 return advance{.fresh = true};
             }
             if (now == last_ts) {
-                if ((cur_hi & kEntropyHighMask) == kEntropyHighMask && cur_lo == kMaxUint64) {
+                if ((current.hi & kEntropyHighMask) == kEntropyHighMask &&
+                    current.lo == kMaxUint64) {
                     return std::unexpected(errc::generation_overflow);
                 }
-                std::uint64_t next_lo = cur_lo + 1;
-                std::uint64_t next_hi = cur_hi;
-                if (next_lo == 0) {
-                    ++next_hi;
+                parts next{.hi = current.hi, .lo = current.lo + 1};
+                if (next.lo == 0) {
+                    ++next.hi;
                 }
-                return advance{.next_hi = next_hi, .next_lo = next_lo};
+                return advance{.next = next};
             }
             return std::unexpected(errc::time_reversed);
         }
@@ -192,28 +194,36 @@ namespace ulid26 {
             std::uint64_t lo    = 0;
         };
 
-        // Adds offset to the 128-bit (hi, lo) pair. Callers establish that the
-        // result stays inside one timestamp (the reservation bound).
         [[nodiscard]]
-        constexpr state
-        offset_state(std::uint64_t hi, std::uint64_t lo, std::uint64_t offset) noexcept {
-            std::uint64_t const next_lo = lo + offset;
-            std::uint64_t const carry   = (next_lo < lo) ? std::uint64_t{1} : std::uint64_t{0};
-            return state{.ts_hi = hi + carry, .lo = next_lo};
+        constexpr parts to_parts(state value) noexcept {
+            return parts{.hi = value.ts_hi, .lo = value.lo};
+        }
+
+        [[nodiscard]]
+        constexpr ulid assemble_ulid(state value) noexcept {
+            return assemble_ulid(to_parts(value));
+        }
+
+        // Adds offset to the 128-bit pair. Callers establish that the result
+        // stays inside one timestamp (the reservation bound).
+        [[nodiscard]]
+        constexpr state offset_state(parts start, std::uint64_t offset) noexcept {
+            std::uint64_t const next_lo = start.lo + offset;
+            std::uint64_t const carry = (next_lo < start.lo) ? std::uint64_t{1} : std::uint64_t{0};
+            return state{.ts_hi = start.hi + carry, .lo = next_lo};
         }
 
         // How many of count ids fit after start. start is the first id after
         // the current state, so it is never beyond the entropy maximum.
         [[nodiscard]]
-        constexpr std::uint64_t
-        grant_from_start(std::uint64_t hi, std::uint64_t lo, std::uint64_t count) noexcept {
-            if ((hi & kEntropyHighMask) != kEntropyHighMask) {
+        constexpr std::uint64_t grant_from_start(parts start, std::uint64_t count) noexcept {
+            if ((start.hi & kEntropyHighMask) != kEntropyHighMask) {
                 return count; // at least 2^64 ids remain, and count <= 2^64 - 1
             }
-            if (lo == 0) {
+            if (start.lo == 0) {
                 return count; // exactly 2^64 ids remain
             }
-            std::uint64_t const available = kMaxUint64 - lo + 1;
+            std::uint64_t const available = kMaxUint64 - start.lo + 1;
             return std::min(count, available);
         }
 
@@ -534,8 +544,7 @@ namespace ulid26 {
 
             [[nodiscard]]
             constexpr ulid operator*() const noexcept {
-                auto const at = detail::offset_state(first_hi_, first_lo_, index_);
-                return detail::assemble_ulid(at.ts_hi, at.lo);
+                return detail::assemble_ulid(detail::offset_state(first_, index_));
             }
 
             constexpr iterator& operator++() noexcept {
@@ -604,13 +613,11 @@ namespace ulid26 {
           private:
             friend class reservation;
 
-            constexpr iterator(
-                std::uint64_t first_hi, std::uint64_t first_lo, std::uint64_t index
-            ) noexcept : first_hi_(first_hi), first_lo_(first_lo), index_(index) {}
+            constexpr iterator(detail::parts first, std::uint64_t index) noexcept :
+                first_(first), index_(index) {}
 
-            std::uint64_t first_hi_ = 0;
-            std::uint64_t first_lo_ = 0;
-            std::uint64_t index_    = 0;
+            detail::parts first_{};
+            std::uint64_t index_ = 0;
         };
 
         constexpr reservation() = default;
@@ -627,7 +634,7 @@ namespace ulid26 {
 
         [[nodiscard]]
         constexpr ulid first() const noexcept {
-            return detail::assemble_ulid(first_hi_, first_lo_);
+            return detail::assemble_ulid(first_);
         }
 
         [[nodiscard]]
@@ -635,44 +642,39 @@ namespace ulid26 {
             if (count_ == 0) {
                 return ulid{};
             }
-            auto const end = detail::offset_state(first_hi_, first_lo_, count_ - 1);
-            return detail::assemble_ulid(end.ts_hi, end.lo);
+            return detail::assemble_ulid(detail::offset_state(first_, count_ - 1));
         }
 
         [[nodiscard]]
         constexpr ulid operator[](std::uint64_t index) const noexcept {
-            auto const at = detail::offset_state(first_hi_, first_lo_, index);
-            return detail::assemble_ulid(at.ts_hi, at.lo);
+            return detail::assemble_ulid(detail::offset_state(first_, index));
         }
 
         [[nodiscard]]
         constexpr iterator begin() const noexcept {
-            return iterator{first_hi_, first_lo_, 0};
+            return iterator{first_, 0};
         }
 
         [[nodiscard]]
         constexpr iterator end() const noexcept {
-            return iterator{first_hi_, first_lo_, count_};
+            return iterator{first_, count_};
         }
 
       private:
         friend struct detail::reservation_access;
 
-        constexpr reservation(
-            std::uint64_t first_hi, std::uint64_t first_lo, std::uint64_t count
-        ) noexcept : first_hi_(first_hi), first_lo_(first_lo), count_(count) {}
+        constexpr reservation(detail::parts first, std::uint64_t count) noexcept :
+            first_(first), count_(count) {}
 
-        std::uint64_t first_hi_ = 0;
-        std::uint64_t first_lo_ = 0;
-        std::uint64_t count_    = 0;
+        detail::parts first_{};
+        std::uint64_t count_ = 0;
     };
 
     namespace detail {
         struct reservation_access {
             [[nodiscard]]
-            static constexpr reservation
-            make(std::uint64_t first_hi, std::uint64_t first_lo, std::uint64_t count) noexcept {
-                return reservation{first_hi, first_lo, count};
+            static constexpr reservation make(parts first, std::uint64_t count) noexcept {
+                return reservation{first, count};
             }
         };
     } // namespace detail
@@ -691,7 +693,12 @@ namespace ulid26 {
         if (timestamp >= detail::kTimestampModulus) {
             timestamp = detail::kMaxTimestamp;
         }
-        return detail::assemble_ulid((timestamp << detail::kTimestampShift) | split.hi, split.lo);
+        return detail::assemble_ulid(
+            detail::parts{
+                .hi = (timestamp << detail::kTimestampShift) | split.hi,
+                .lo = split.lo,
+            }
+        );
     }
 
     // Monotonic generator with per-object state: zero synchronization. Copying
@@ -759,8 +766,9 @@ namespace ulid26 {
             if (count == 0) {
                 return reservation{};
             }
-            std::uint64_t const now      = detail::clock_ms();
-            auto const          decision = detail::decide_advance(ts_hi_, lo_, now);
+            std::uint64_t const now = detail::clock_ms();
+            auto const          decision =
+                detail::decide_advance(detail::parts{.hi = ts_hi_, .lo = lo_}, now);
             if (!decision) {
                 if (decision.error() == errc::generation_overflow) {
                     return reservation{};
@@ -768,24 +776,20 @@ namespace ulid26 {
                 return std::unexpected(make_error_code(decision.error()));
             }
 
-            std::uint64_t first_hi = 0;
-            std::uint64_t first_lo = 0;
-            std::uint64_t granted  = 0;
+            detail::parts first{};
+            std::uint64_t granted = 0;
             if (decision->fresh) {
-                auto const start = detail::fresh_reservation_start(rng_, now, count);
-                first_hi         = start.ts_hi;
-                first_lo         = start.lo;
-                granted          = count;
+                first   = detail::to_parts(detail::fresh_reservation_start(rng_, now, count));
+                granted = count;
             } else {
-                first_hi = decision->next_hi;
-                first_lo = decision->next_lo;
-                granted  = detail::grant_from_start(first_hi, first_lo, count);
+                first   = decision->next;
+                granted = detail::grant_from_start(first, count);
             }
 
-            auto const end = detail::offset_state(first_hi, first_lo, granted - 1);
+            auto const end = detail::offset_state(first, granted - 1);
             ts_hi_         = end.ts_hi;
             lo_            = end.lo;
-            return detail::reservation_access::make(first_hi, first_lo, granted);
+            return detail::reservation_access::make(first, granted);
         }
 
       private:
@@ -839,10 +843,10 @@ namespace ulid26 {
             detail::state observed{};
             detail::cas_state(&shared.data, observed, observed);
             for (;;) {
-                auto decision = detail::decide_advance(observed.ts_hi, observed.lo, now);
+                auto decision = detail::decide_advance(detail::to_parts(observed), now);
                 if (!decision) {
                     now      = detail::clock_ms();
-                    decision = detail::decide_advance(observed.ts_hi, observed.lo, now);
+                    decision = detail::decide_advance(detail::to_parts(observed), now);
                     if (!decision) {
                         return std::unexpected(make_error_code(decision.error()));
                     }
@@ -851,9 +855,9 @@ namespace ulid26 {
                 detail::state const first =
                     decision->fresh ?
                         detail::fresh_reservation_start<R>(now, 1) :
-                        detail::state{.ts_hi = decision->next_hi, .lo = decision->next_lo};
+                        detail::state{.ts_hi = decision->next.hi, .lo = decision->next.lo};
                 if (detail::cas_state(&shared.data, observed, first)) {
-                    return detail::assemble_ulid(first.ts_hi, first.lo);
+                    return detail::assemble_ulid(first);
                 }
                 detail::pause_hint();
             }
@@ -863,7 +867,7 @@ namespace ulid26 {
         static std::expected<ulid, std::error_code> next_locked(detail::shared_state<R>& shared) {
             std::scoped_lock const lock{shared.mutex};
             std::uint64_t const    now = detail::clock_ms();
-            auto const decision = detail::decide_advance(shared.data.ts_hi, shared.data.lo, now);
+            auto const decision        = detail::decide_advance(detail::to_parts(shared.data), now);
             if (!decision) {
                 return std::unexpected(make_error_code(decision.error()));
             }
@@ -871,9 +875,9 @@ namespace ulid26 {
             detail::state const first =
                 decision->fresh ?
                     detail::fresh_reservation_start<R>(now, 1) :
-                    detail::state{.ts_hi = decision->next_hi, .lo = decision->next_lo};
+                    detail::state{.ts_hi = decision->next.hi, .lo = decision->next.lo};
             shared.data = first;
-            return detail::assemble_ulid(first.ts_hi, first.lo);
+            return detail::assemble_ulid(first);
         }
 
         [[nodiscard]]
@@ -883,10 +887,10 @@ namespace ulid26 {
             detail::state observed{};
             detail::cas_state(&shared.data, observed, observed);
             for (;;) {
-                auto decision = detail::decide_advance(observed.ts_hi, observed.lo, now);
+                auto decision = detail::decide_advance(detail::to_parts(observed), now);
                 if (!decision) {
                     now      = detail::clock_ms();
-                    decision = detail::decide_advance(observed.ts_hi, observed.lo, now);
+                    decision = detail::decide_advance(detail::to_parts(observed), now);
                     if (!decision) {
                         if (decision.error() == errc::generation_overflow) {
                             return reservation{};
@@ -895,23 +899,19 @@ namespace ulid26 {
                     }
                 }
 
-                std::uint64_t first_hi = 0;
-                std::uint64_t first_lo = 0;
-                std::uint64_t granted  = 0;
+                detail::parts first{};
+                std::uint64_t granted = 0;
                 if (decision->fresh) {
-                    auto const start = detail::fresh_reservation_start<R>(now, count);
-                    first_hi         = start.ts_hi;
-                    first_lo         = start.lo;
-                    granted          = count;
+                    first   = detail::to_parts(detail::fresh_reservation_start<R>(now, count));
+                    granted = count;
                 } else {
-                    first_hi = decision->next_hi;
-                    first_lo = decision->next_lo;
-                    granted  = detail::grant_from_start(first_hi, first_lo, count);
+                    first   = decision->next;
+                    granted = detail::grant_from_start(first, count);
                 }
 
-                detail::state const desired = detail::offset_state(first_hi, first_lo, granted - 1);
+                detail::state const desired = detail::offset_state(first, granted - 1);
                 if (detail::cas_state(&shared.data, observed, desired)) {
-                    return detail::reservation_access::make(first_hi, first_lo, granted);
+                    return detail::reservation_access::make(first, granted);
                 }
                 detail::pause_hint();
             }
@@ -922,7 +922,7 @@ namespace ulid26 {
         reserve_locked(detail::shared_state<R>& shared, std::uint64_t count) {
             std::scoped_lock const lock{shared.mutex};
             std::uint64_t const    now = detail::clock_ms();
-            auto const decision = detail::decide_advance(shared.data.ts_hi, shared.data.lo, now);
+            auto const decision        = detail::decide_advance(detail::to_parts(shared.data), now);
             if (!decision) {
                 if (decision.error() == errc::generation_overflow) {
                     return reservation{};
@@ -930,22 +930,18 @@ namespace ulid26 {
                 return std::unexpected(make_error_code(decision.error()));
             }
 
-            std::uint64_t first_hi = 0;
-            std::uint64_t first_lo = 0;
-            std::uint64_t granted  = 0;
+            detail::parts first{};
+            std::uint64_t granted = 0;
             if (decision->fresh) {
-                auto const start = detail::fresh_reservation_start<R>(now, count);
-                first_hi         = start.ts_hi;
-                first_lo         = start.lo;
-                granted          = count;
+                first   = detail::to_parts(detail::fresh_reservation_start<R>(now, count));
+                granted = count;
             } else {
-                first_hi = decision->next_hi;
-                first_lo = decision->next_lo;
-                granted  = detail::grant_from_start(first_hi, first_lo, count);
+                first   = decision->next;
+                granted = detail::grant_from_start(first, count);
             }
 
-            shared.data = detail::offset_state(first_hi, first_lo, granted - 1);
-            return detail::reservation_access::make(first_hi, first_lo, granted);
+            shared.data = detail::offset_state(first, granted - 1);
+            return detail::reservation_access::make(first, granted);
         }
 
         bool use_cas_ = detail::cpu_has_cas128();
