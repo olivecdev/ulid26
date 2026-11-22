@@ -36,7 +36,14 @@ namespace {
 
         static constexpr result_type max() { return ~result_type{0}; }
 
-        result_type operator()() { throw engine_failure{}; }
+        result_type operator()() {
+            if (fail) {
+                throw engine_failure{};
+            }
+            return 0;
+        }
+
+        bool volatile fail = true;
     };
 
     [[nodiscard]]
