@@ -75,9 +75,11 @@
             ${ccEnv}
             ${cmakePackageEnv}
             # Debug + gcov suite, then the Linux tracefile for the merge.
+            # generate_test.cpp builds once per tier, so identical cas functions
+            # appear at different lines; merge those function records.
             set -euo pipefail
             cmake --workflow --preset cov
-            gcovr --root . --object-directory build/cov --filter 'ulid26/.*' --merge-lines --json -o coverage-linux.json
+            gcovr --root . --object-directory build/cov --filter 'ulid26/.*' --merge-lines --merge-mode-functions=merge-use-line-min --json -o coverage-linux.json
           '';
 
           fuzz = ''

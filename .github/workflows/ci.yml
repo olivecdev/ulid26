@@ -105,7 +105,7 @@ jobs:
         run: |
           set -euo pipefail
           sed -i 's|\\|/|g; s|<source>[^<]*</source>|<source>.</source>|g; s|filename="[^"]*/|filename="|g; s|filename="|filename="ulid26/|g' coverage-win.xml
-          gcovr --json-add-tracefile coverage-linux.json --cobertura-add-tracefile coverage-win.xml --root . --filter 'ulid26/.*' --merge-lines --print-summary --fail-under-line 93 --gcov-ignore-parse-errors negative_hits.warn_once_per_file --html-details --html-single-page static --output coverage-html.html
+          gcovr --json-add-tracefile coverage-linux.json --cobertura-add-tracefile coverage-win.xml --root . --filter 'ulid26/.*' --merge-lines --merge-mode-functions=merge-use-line-min --print-summary --fail-under-line 93 --gcov-ignore-parse-errors negative_hits.warn_once_per_file --html-details --html-single-page static --output coverage-html.html
       - name: upload HTML report
         uses: actions/upload-artifact@v4
         with:
