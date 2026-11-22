@@ -67,7 +67,7 @@ Forbidden:
 - **Layout changes include portability.** Timestamp/entropy layout, iterator, and range changes
   should consider 32-bit targets and host-endian assumptions, not only x86-64 Linux.
   32-bit and MinGW-w64 are best-effort with no CI gate.
-- **Warnings are a test-only gate.** Strict flags belong on test and fuzz executables and never
+- **Warnings are a test-only gate.** Strict flags belong on test, example, and fuzz executables and never
   leak through the installed `INTERFACE` target. Avoid `-Weverything`; maintain an explicit set.
 - **Configuration is compile-time.** Library toggles use `ULID26_*` macros exposed through
   documented CMake options and propagated as `INTERFACE` usage requirements. Toggles default off,
@@ -105,7 +105,7 @@ merge (pip gcovr), which need no Nix. Run from the repo root:
 | `bench` | `nix run .#bench` | Release benchmark matrix (ten repetitions, aggregates only; extra args forward to every suite; `ULID26_BENCH_CPU` pins CPUs, default 2, empty means unpinned) |
 
 The `ci` gate formats all sources, then runs clang-tidy over the test translation units (which
-include every library header); benchmark and fuzz sources stay out of clang-tidy.
+include every library header); benchmark, example, and fuzz sources stay out of clang-tidy.
 
 CI job count is a budget: merge steps into existing jobs when Nix setup overhead exceeds the work,
 but keep local and CI commands on the same flake apps.
@@ -162,6 +162,7 @@ ulid26/generators.hpp        generation layer: entropy engines, one-shot and mon
 ulid26/ulid26.hpp            include-all umbrella over the two layers
 src/                             (nothing — header-only)
 test/                            constexpr, spec vectors, property, stress, generation/reservations
+examples/                        complete end-to-end programs, compiled and run by CI
 bench/                           Google Benchmark suites for the value codec and generation
 ```
 

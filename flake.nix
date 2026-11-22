@@ -54,7 +54,7 @@
             ${cmakePackageEnv}
             # Style gates first: fail fast before compiling.
             set -euo pipefail
-            clang-format --dry-run --Werror ulid26/ulid26.hpp ulid26/value.hpp ulid26/generators.hpp test/value_test.cpp test/generate_test.cpp bench/bench_bytes.cpp bench/bench_generation.cpp bench/bench_is_valid.cpp bench/bench_streams.cpp bench/bench_to_chars.cpp fuzz/fuzz_text.cpp
+            clang-format --dry-run --Werror ulid26/ulid26.hpp ulid26/value.hpp ulid26/generators.hpp test/value_test.cpp test/generate_test.cpp bench/bench_bytes.cpp bench/bench_generation.cpp bench/bench_is_valid.cpp bench/bench_streams.cpp bench/bench_to_chars.cpp fuzz/fuzz_text.cpp examples/value_parse_print.cpp examples/generate_one_shot.cpp examples/generate_bulk.cpp examples/generate_shared_mt.cpp
             # Clang test TUs include every library header; benchmarks and fuzz stay out.
             cmake --workflow --preset tidy
             clang-tidy --quiet -p build/tidy '--warnings-as-errors=*' test/value_test.cpp test/generate_test.cpp

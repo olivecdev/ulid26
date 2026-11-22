@@ -28,9 +28,9 @@ if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     FetchContent_MakeAvailable(suyash_ulid)
 endif()
 
-# No ulid26_warnings here by convention (see test/CMakeLists.txt): the
-# strict set applies to the test binaries, benchmarks stay warning-clean
-# by construction instead.
+# No ulid26_warnings here by convention (see cmake/ulid26_warnings.cmake): the
+# strict set applies to the test and example binaries, benchmarks stay
+# warning-clean by construction instead.
 add_executable(bench_is_valid bench_is_valid.cpp)
 target_link_libraries(bench_is_valid PRIVATE ulid26 benchmark::benchmark)
 if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")

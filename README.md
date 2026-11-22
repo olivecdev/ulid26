@@ -22,10 +22,31 @@ header-only. Entropy engines may throw while acquiring OS entropy.
 C++23 |  header-only | zero deps | constexpr
 ```
 
+> **Status: 0.x beta (`v0.9.0`).** The library is ready to try and to depend on with an exact
+> pin, but the API may still break before `1.0`. If you find a bug or a use case that forces an
+> API change, please file an issue with compiler, version, and a minimal repro.
+
 ```cpp
 ulid26::ulid id = ulid26::generate();
 // 01ARZ3NDEKTSV4RRFFQ69G5FAV
 ```
+
+## Contents
+
+- [Why ULID](#why-ulid)
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [The value type `ulid`](#the-value-type-ulid)
+- [Errors](#errors)
+- [Generation](#generation)
+- [Text codec](#text-codec)
+- [Spec conformance](#spec-conformance)
+- [Performance](#performance)
+- [Development](#development)
+- [Design notes](#design-notes)
+- [Repository layout](#repository-layout)
+- [Fun fact](#fun-fact)
+- [License](#license)
 
 ## Why ULID
 
@@ -87,6 +108,15 @@ int main() {
 }
 ```
 
+### End-to-end examples
+
+Complete programs under `examples/`, compiled and run by CI — copy them, don't copy snippets:
+
+- `examples/value_parse_print.cpp` — validate, parse (with `expected` unwrapping), print, bytes round-trip
+- `examples/generate_one_shot.cpp` — `generate()` plus the default/`system_rng` engines and a print round-trip
+- `examples/generate_bulk.cpp` — seeded `unsynchronized_generator`, `next()` with fail-closed clock handling, `reserve(64)` drain with size/index/first/last checks, one `shared_generator` call
+- `examples/generate_shared_mt.cpp` — four threads sharing the global `shared_generator` sequence (one instance by reference, per-thread handles), sortedness and uniqueness of the joint output
+
 ## The value type `ulid`
 
 `ulid26::ulid` is a pure value type: 16 bytes, trivially copyable, standard layout, and
@@ -139,6 +169,8 @@ static_assert(ulid26::try_parse("01ARZ3NDEKTSV4RRFFQ69G5FAV")->timestamp() == 14
 static_assert(ulid26::try_parse("80000000000000000000000000").error() == ulid26::errc::overflow);
 ```
 
+Runnable counterpart: `examples/value_parse_print.cpp` unwraps the same calls at runtime, plus print and bytes round-trip.
+
 ## Errors
 
 Failures use the standard error-code machinery (`std::errc`-style):
@@ -166,6 +198,8 @@ template<> struct std::is_error_code_enum<ulid26::errc> : std::true_type {};
 Errors are recoverable by design: on generation failure, generator state is untouched.
 Entropy-source failures are construction or draw failures and are propagated as exceptions by the
 standard library, we do not interfere with that.
+For the handling shape in real code, see `examples/generate_bulk.cpp`: fail-closed checks with
+bounded retry on `time_reversed`.
 
 ## Generation
 
@@ -179,6 +213,8 @@ ulid26::ulid id = ulid26::generate();
 // Same, with an explicit engine (see Custom entropy engines below).
 ulid26::ulid other = ulid26::generate<ulid26::system_rng>();
 ```
+
+Runnable version: `examples/generate_one_shot.cpp`.
 
 ### Timestamp range
 
@@ -238,6 +274,8 @@ ids. `shared_generator` handles are cheap and all address the same global sequen
 Both flavors expose `next()` for a single id and `reserve(count)` for bulk. Prefer `reserve()` for
 anything beyond one id: it reduces the committing synchronization to one event per block and gives
 you a local range to drain without further calls.
+Runnable version: `examples/generate_bulk.cpp` — seeded generator, `next()`, and `reserve(64)`
+drain with size/index checks.
 
 ### Reservations
 
@@ -303,6 +341,9 @@ but the entropy correlates).
 | `shared_generator` | lock-free CAS (GCC x86-64 / MSVC x64) / mutex fallback | strict global **commit** order: commit order == value order |
 | `reservation` | none | iterating an already-reserved block is pure and repeatable |
 
+Runnable proof: `examples/generate_shared_mt.cpp` mints 1024 ids from four threads sharing one
+global sequence and checks the joint output.
+
 The shared flavor uses a `cmpxchg16b` CAS on a 16-byte aligned state on GCC x86-64 and MSVC x64
 (inline asm on GCC, `_InterlockedCompareExchange128` on MSVC), and a mutex-guarded implementation
 elsewhere. Plain standard C++ doesn't guarantee lock-free atomic operations on 16-byte structures.
@@ -353,6 +394,8 @@ auto v = ulid26::ulid::from_string("01arz3ndektsv4rrffq69g5fav"); // case-insens
 auto b = ulid26::ulid::from_bytes(std::span{raw16});              // network byte order
 ```
 
+Runnable version with `expected` unwrapping: `examples/value_parse_print.cpp`.
+
 ### `std::string` without the extra copy
 
 `to_string()` is the owning conversion: it allocates exactly once via C++23
@@ -387,6 +430,17 @@ bool ok = ulid26::is_valid("01arz3ndektsv4rrffq69g5fav");
 `is_valid` runs the scalar codec without materializing a value: malformed
 input exits at the check, and the first-character overflow cap applies exactly
 as in `decode`.
+
+## Spec conformance
+
+- **Layout**: 16 octets, network byte order: 48-bit ms timestamp, then 80-bit entropy.
+- **Canonical form**: 26 characters, `0123456789ABCDEFGHJKMNPQRSTVWXYZ`, left-most sorted first.
+- **Case-insensitivity**: decode accepts any case; encode is uppercase (canonical).
+- **Range**: values above `7ZZZZZZZZZZZZZZZZZZZZZZZZZ` are rejected (`errc::overflow`).
+- **Aliasing**: `I L O U` (any case) are *not* part of the ULID alphabet and are rejected.
+- **Monotonicity**: within the same millisecond the entropy is incremented with
+  carrying; exhaustion fails explicitly. Across milliseconds sort order follows
+  the timestamp, per spec.
 
 ## Performance
 
@@ -437,17 +491,6 @@ Reservations reduce the committing synchronization to one event per block; drain
 range is local and needs no further calls. The text codec is scalar throughout: direct shifts per
 5-bit group on encode, table loop plus range cap on decode. The same scalar `constexpr` core is
 exercised at compile time and runtime; there is no separate optimized codec to drift from it.
-
-## Spec conformance
-
-- **Layout**: 16 octets, network byte order: 48-bit ms timestamp, then 80-bit entropy.
-- **Canonical form**: 26 characters, `0123456789ABCDEFGHJKMNPQRSTVWXYZ`, left-most sorted first.
-- **Case-insensitivity**: decode accepts any case; encode is uppercase (canonical).
-- **Range**: values above `7ZZZZZZZZZZZZZZZZZZZZZZZZZ` are rejected (`errc::overflow`).
-- **Aliasing**: `I L O U` (any case) are *not* part of the ULID alphabet and are rejected.
-- **Monotonicity**: within the same millisecond the entropy is incremented with
-  carrying; exhaustion fails explicitly. Across milliseconds sort order follows
-  the timestamp, per spec.
 
 ## Development
 
@@ -504,6 +547,7 @@ ulid26/generators.hpp        generation layer: entropy engines, one-shot and mon
 ulid26/ulid26.hpp            include-all umbrella over the two layers
 src/                             (nothing — header-only)
 test/                            constexpr, spec vectors, property, stress, generation/reservations
+examples/                        complete end-to-end programs, compiled and run by CI
 bench/                           Google Benchmark suites for the value codec and generation
 ```
 
