@@ -14,7 +14,7 @@
 cmake_minimum_required(VERSION 3.26)
 project(
     ulid26
-    VERSION 0.0.1
+    VERSION 0.9.0
     DESCRIPTION "C++23 ULID implementation"
     HOMEPAGE_URL "https://olivec.dev"
     LANGUAGES CXX

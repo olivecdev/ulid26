@@ -53,7 +53,7 @@ millisecond timestamp** and **80 bits of entropy** into 128 bits, canonically en
 
 | | |
 |---|---|
-| Compilers | GCC 14+ (primary, incl. CAS tier; CI runs GCC 16) · Clang 22+ (mutex tier) · MSVC 19.36+ / VS 2022 17.6+ (CAS tier on x64, mutex elsewhere; Windows CI) · MinGW-w64 GCC 14+ (CAS tier expected; not run here) · floor validated by the `ci` workflow on bare ubuntu-24.04 + GCC 14 (`baseline` job) |
+| Compilers | GCC 14+ (primary, incl. CAS tier; CI runs GCC 16) · Clang 22+ (mutex tier) · MSVC 19.36+ / VS 2022 17.6+ (CAS tier on x64, mutex elsewhere; Windows CI) · floor validated by the `ci` workflow on bare ubuntu-24.04 + GCC 14 (`baseline` job). MinGW-w64 GCC 14+ is best-effort (CAS tier expected; not run in CI); 32-bit targets are best-effort and not covered by CI |
 | Standard | C++23 (`-std=c++23`; MSVC maps it to `/std:c++latest`) |
 | Windows | `cmake -S . -B build/win -G "Visual Studio 17 2022" -A x64` (presets pin Ninja); reference comparisons are excluded there — suyash/ulid needs `__int128` |
 | Dependencies | none |
@@ -68,7 +68,7 @@ include(FetchContent)
 FetchContent_Declare(
     ulid26
     GIT_REPOSITORY https://github.com/olivecdev/ulid26
-    GIT_TAG        v1.0.0
+    GIT_TAG        v0.9.0
 )
 FetchContent_MakeAvailable(ulid26)
 

@@ -65,7 +65,8 @@ Forbidden:
   `/W4 /WX /permissive- /std:c++latest`. Online compiler checks are preflight only; the actual
   Windows CI job is authoritative.
 - **Layout changes include portability.** Timestamp/entropy layout, iterator, and range changes
-  must be checked for 32-bit targets and host-endian assumptions, not only x86-64 Linux.
+  should consider 32-bit targets and host-endian assumptions, not only x86-64 Linux.
+  32-bit and MinGW-w64 are best-effort with no CI gate.
 - **Warnings are a test-only gate.** Strict flags belong on test and fuzz executables and never
   leak through the installed `INTERFACE` target. Avoid `-Weverything`; maintain an explicit set.
 - **Configuration is compile-time.** Library toggles use `ULID26_*` macros exposed through
