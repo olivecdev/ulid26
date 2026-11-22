@@ -36,7 +36,6 @@
 #include <mutex>
 #include <random>
 #include <ranges>
-#include <span>
 #include <type_traits>
 #include <ulid26/value.hpp>
 #include <utility>
@@ -140,11 +139,6 @@ namespace ulid26 {
             return working;
         }
 
-        [[nodiscard]]
-        constexpr std::uint64_t byte_value(std::byte octet) noexcept {
-            return static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(octet));
-        }
-
         // The two 64-bit halves of the value. hi holds the 48-bit timestamp in
         // its high bits and the high 16 entropy bits in its low bits; lo holds
         // the low 64 entropy bits.
@@ -155,45 +149,26 @@ namespace ulid26 {
             friend constexpr auto operator<=>(parts const&, parts const&) = default;
         };
 
+        struct parts_access {
+            [[nodiscard]]
+            static constexpr ulid make(parts value) noexcept {
+                return ulid{value.hi, value.lo};
+            }
+
+            [[nodiscard]]
+            static constexpr parts split(ulid value) noexcept {
+                return parts{.hi = value.hi_, .lo = value.low_};
+            }
+        };
+
         [[nodiscard]]
         constexpr ulid assemble_ulid(parts value) noexcept {
-            std::array<std::byte, ulid::kBinarySize> bytes{};
-            for (std::size_t i = 0; i < kHalfLength; ++i) {
-                bytes[i] = static_cast<std::byte>(
-                    (value.hi >> (kTopByteShift - (i * kBitsPerByte))) & kByteMask
-                );
-                bytes[kHalfLength + i] = static_cast<std::byte>(
-                    (value.lo >> (kTopByteShift - (i * kBitsPerByte))) & kByteMask
-                );
-            }
-            return ulid::from_bytes(std::span<std::byte, ulid::kBinarySize>{bytes});
+            return parts_access::make(value);
         }
 
         [[nodiscard]]
         constexpr parts split_ulid(ulid value) noexcept {
-            std::array<std::byte, ulid::kBinarySize> bytes{};
-            value.to_bytes(std::span<std::byte, ulid::kBinarySize>{bytes});
-            parts out{};
-            for (std::size_t i = 0; i < kHalfLength; ++i) {
-                out.hi = (out.hi << kBitsPerByte) | byte_value(bytes[i]);
-                out.lo = (out.lo << kBitsPerByte) | byte_value(bytes[kHalfLength + i]);
-            }
-            return out;
-        }
-
-        // Splits 10 entropy bytes into the halves: only the low 16 bits of hi
-        // are used.
-        [[nodiscard]]
-        constexpr parts split_entropy(std::span<std::byte const, kEntropyBytes> bytes) noexcept {
-            std::uint64_t hi = 0;
-            for (std::byte const octet : bytes.first<kEntropyHiBytes>()) {
-                hi = (hi << kBitsPerByte) | byte_value(octet);
-            }
-            std::uint64_t lo = 0;
-            for (std::byte const octet : bytes.subspan<kEntropyHiBytes>()) {
-                lo = (lo << kBitsPerByte) | byte_value(octet);
-            }
-            return parts{.hi = hi, .lo = lo};
+            return parts_access::split(value);
         }
 
         [[nodiscard]]
@@ -212,7 +187,7 @@ namespace ulid26 {
         // (fresh == true, next unused) or next already holds the successor.
         struct advance {
             parts next{};
-            bool  fresh = false;
+            bool  needs_fresh = false;
         };
 
         // The decision is a pure function of the observed halves and the clock.
@@ -224,7 +199,7 @@ namespace ulid26 {
             }
             std::uint64_t const last_ts = current.hi >> kTimestampShift;
             if (now > last_ts) {
-                return advance{.fresh = true};
+                return advance{.needs_fresh = true};
             }
             if (now == last_ts) {
                 if ((current.hi & kEntropyHighMask) == kEntropyHighMask &&
@@ -380,24 +355,30 @@ namespace ulid26 {
         }
 #endif
 
-        // Fans engine words out into 10 bytes (80 bits), consuming exactly the
+        // Fans engine words into the 80 entropy bits, consuming exactly the
         // engine's significant bits per draw, so a 31-bit engine never
         // contributes a stuck-zero top bit.
         template <entropy_engine R>
-        void fill_entropy(R& source, std::span<std::byte, kEntropyBytes> out) {
+        void fill_entropy(R& source, parts& out) {
             using word_t                       = std::invoke_result_t<R&>;
             constexpr std::size_t kSignificant = static_cast<std::size_t>(
                 std::bit_width(static_cast<std::uint64_t>(R::max() - R::min()))
             );
             static_assert(kSignificant >= kBitsPerByte);
+            out                   = parts{};
             word_t      pool      = 0;
             std::size_t available = 0;
-            for (std::byte& slot : out) {
+            for (std::size_t index = 0; index < kEntropyBytes; ++index) {
                 if (available < kBitsPerByte) {
                     pool      = static_cast<word_t>(source() - R::min());
                     available = kSignificant;
                 }
-                slot        = static_cast<std::byte>(pool & kByteMask);
+                std::uint64_t const octet = pool & kByteMask;
+                if (index < kEntropyHiBytes) {
+                    out.hi = (out.hi << kBitsPerByte) | octet;
+                } else {
+                    out.lo = (out.lo << kBitsPerByte) | octet;
+                }
                 pool      >>= kBitsPerByte;
                 available  -= kBitsPerByte;
             }
@@ -405,10 +386,10 @@ namespace ulid26 {
 
         template <entropy_engine R>
         [[nodiscard]]
-        std::array<std::byte, kEntropyBytes> draw_entropy() {
-            thread_local R                       source{};
-            std::array<std::byte, kEntropyBytes> entropy{};
-            fill_entropy(source, std::span<std::byte, kEntropyBytes>{entropy});
+        parts draw_entropy() {
+            thread_local R source{};
+            parts          entropy{};
+            fill_entropy(source, entropy);
             return entropy;
         }
 
@@ -418,9 +399,8 @@ namespace ulid26 {
         template <entropy_engine R>
         [[nodiscard]]
         state fresh_reservation_start(R& engine, std::uint64_t now, std::uint64_t count) {
-            std::array<std::byte, kEntropyBytes> entropy{};
-            fill_entropy(engine, std::span<std::byte, kEntropyBytes>{entropy});
-            parts const         split = split_entropy(entropy);
+            parts split{};
+            fill_entropy(engine, split);
             std::uint64_t const delta = count - 1;
             std::uint64_t const limit = kMaxUint64 - delta;
             std::uint64_t const lo    = std::min(split.lo, limit);
@@ -704,9 +684,8 @@ namespace ulid26 {
     template <entropy_engine R = default_rng>
     [[nodiscard]]
     ulid generate() {
-        std::array<std::byte, detail::kEntropyBytes> const entropy = detail::draw_entropy<R>();
-        detail::parts const                                split   = detail::split_entropy(entropy);
-        std::uint64_t                                      timestamp = detail::clock_ms();
+        detail::parts const split     = detail::draw_entropy<R>();
+        std::uint64_t       timestamp = detail::clock_ms();
         if (timestamp >= detail::kTimestampModulus) {
             timestamp = detail::kMaxTimestamp;
         }
@@ -797,7 +776,7 @@ namespace ulid26 {
 
             detail::parts first{};
             std::uint64_t granted = 0;
-            if (decision->fresh) {
+            if (decision->needs_fresh) {
                 first   = detail::to_parts(detail::fresh_reservation_start(rng_, now, count));
                 granted = count;
             } else {
@@ -872,7 +851,7 @@ namespace ulid26 {
                 }
 
                 detail::state const first =
-                    decision->fresh ?
+                    decision->needs_fresh ?
                         detail::fresh_reservation_start<R>(now, 1) :
                         detail::state{.ts_hi = decision->next.hi, .lo = decision->next.lo};
                 if (detail::cas_state(&shared.data, observed, first)) {
@@ -892,7 +871,7 @@ namespace ulid26 {
             }
 
             detail::state const first =
-                decision->fresh ?
+                decision->needs_fresh ?
                     detail::fresh_reservation_start<R>(now, 1) :
                     detail::state{.ts_hi = decision->next.hi, .lo = decision->next.lo};
             shared.data = first;
@@ -920,7 +899,7 @@ namespace ulid26 {
 
                 detail::parts first{};
                 std::uint64_t granted = 0;
-                if (decision->fresh) {
+                if (decision->needs_fresh) {
                     first   = detail::to_parts(detail::fresh_reservation_start<R>(now, count));
                     granted = count;
                 } else {
@@ -951,7 +930,7 @@ namespace ulid26 {
 
             detail::parts first{};
             std::uint64_t granted = 0;
-            if (decision->fresh) {
+            if (decision->needs_fresh) {
                 first   = detail::to_parts(detail::fresh_reservation_start<R>(now, count));
                 granted = count;
             } else {

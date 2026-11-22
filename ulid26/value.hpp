@@ -43,6 +43,10 @@ namespace ulid26 {
     // trivially copyable, fully constexpr.
     class ulid;
 
+    namespace detail {
+        struct parts_access;
+    } // namespace detail
+
     namespace literals {
         /// Opt-in operator for the suffix _ulid, which parses a literal at compile time and fails
         /// the build if the literal is invalid.
@@ -214,6 +218,8 @@ namespace ulid26 {
         friend constexpr ulid max() noexcept;
 
         friend constexpr ulid min() noexcept;
+
+        friend struct detail::parts_access;
 
         /// Interoperability with the standard library: stream operators for text I/O.
         template <std_char CharT, typename Traits = std::char_traits<CharT>>
