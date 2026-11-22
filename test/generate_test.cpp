@@ -136,28 +136,43 @@ int main() {
         }
     };
 
-    "entropy exhaustion fails closed"_test = [] {
-        constexpr int kAttempts = 8;
+    "entropy exhaustion fails next closed"_test = [] {
+        constexpr int kAttempts = 16;
         bool          observed  = false;
         for (int attempt = 0; attempt < kAttempts && !observed; ++attempt) {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
             auto const                         now = ulid26::generate().timestamp();
             ulid26::unsynchronized_generator<> generator{make_ulid(now, kHighMask, kEntropyMax)};
             auto const                         single = generator.next();
-            if (!single) {
-                if (single.error() != ulid26::make_error_code(ulid26::errc::generation_overflow)) {
-                    expect(false) << "unexpected next() error";
-                    return;
-                }
-                auto const block = generator.reserve(1);
-                expect(block.has_value()) << "exhausted reservation is success";
-                if (block) {
-                    expect(block->empty()) << "exhausted reservation is empty";
-                    observed = true;
-                }
+            if (single) {
+                continue;
             }
+            if (single.error() != ulid26::make_error_code(ulid26::errc::generation_overflow)) {
+                expect(false) << "unexpected next() error";
+                return;
+            }
+            observed = true;
         }
         expect(observed) << "same-millisecond exhaustion observed";
+    };
+
+    "exhausted reservation is empty success"_test = [] {
+        constexpr int kAttempts = 16;
+        bool          observed  = false;
+        for (int attempt = 0; attempt < kAttempts && !observed; ++attempt) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            auto const                         now = ulid26::generate().timestamp();
+            ulid26::unsynchronized_generator<> generator{make_ulid(now, kHighMask, kEntropyMax)};
+            auto const                         block = generator.reserve(1);
+            expect(block.has_value()) << "exhausted reservation is success";
+            if (!block) {
+                return;
+            }
+            if (block->empty()) {
+                observed = true;
+            }
+        }
+        expect(observed) << "same-millisecond empty grant observed";
     };
 
     "reservation can be short near entropy exhaustion"_test = [] {

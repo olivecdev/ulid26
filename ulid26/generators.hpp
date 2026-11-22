@@ -152,7 +152,6 @@ namespace ulid26 {
             std::uint64_t hi = 0;
             std::uint64_t lo = 0;
 
-            friend constexpr bool operator==(parts const&, parts const&)  = default;
             friend constexpr auto operator<=>(parts const&, parts const&) = default;
         };
 
@@ -605,7 +604,6 @@ namespace ulid26 {
                 return *(*this + offset);
             }
 
-            friend constexpr bool operator==(iterator const&, iterator const&)  = default;
             friend constexpr auto operator<=>(iterator const&, iterator const&) = default;
 
             friend constexpr iterator operator+(iterator pos, difference_type offset) noexcept {
@@ -705,7 +703,7 @@ namespace ulid26 {
     // reservation rather than calling this in a loop.
     template <entropy_engine R = default_rng>
     [[nodiscard]]
-    inline ulid generate() {
+    ulid generate() {
         std::array<std::byte, detail::kEntropyBytes> const entropy = detail::draw_entropy<R>();
         detail::parts const                                split   = detail::split_entropy(entropy);
         std::uint64_t                                      timestamp = detail::clock_ms();
@@ -826,8 +824,6 @@ namespace ulid26 {
     template <entropy_engine R = default_rng>
     class shared_generator {
       public:
-        shared_generator() = default;
-
         // A single id. For more than one, reserve() rather than looping this.
         [[nodiscard]]
         std::expected<ulid, std::error_code> next() {
