@@ -258,20 +258,32 @@ namespace ulid26 {
             return std::min(count, available);
         }
 
+        // Compile-time availability and runtime capability of 128-bit CAS.
+        struct cas {
+            [[nodiscard]]
+            static constexpr bool available() noexcept;
+            [[nodiscard]]
+            static bool runtime_supported() noexcept;
+            static void pause() noexcept;
+            static bool
+            compare_exchange(state volatile* ptr, state& expected, state desired) noexcept;
+        };
+
 #if defined(ULID26_FORCE_MUTEX)
         // Compile-time escape hatch for ThreadSanitizer and mutex-tier validation.
         // Define ULID26_FORCE_MUTEX to omit the CAS tier entirely.
-        constexpr inline bool kHasCas128 = false;
+        constexpr bool cas::available() noexcept { return false; }
 
         [[nodiscard]]
-        inline bool cpu_has_cas128() noexcept {
+        inline bool cas::runtime_supported() noexcept {
             return false;
         }
 
-        inline void pause_hint() noexcept {}
+        inline void cas::pause() noexcept {}
 
-        // Unreachable stub: discarded if-constexpr branches still name cas_state.
-        inline bool cas_state(state volatile* ptr, state& expected, state desired) noexcept {
+        // Unreachable stub: discarded if-constexpr branches still name compare_exchange.
+        inline bool
+        cas::compare_exchange(state volatile* ptr, state& expected, state desired) noexcept {
             static_cast<void>(ptr);
             static_cast<void>(expected);
             static_cast<void>(desired);
@@ -279,12 +291,13 @@ namespace ulid26 {
         }
 #elif defined(__x86_64__) && defined(__GNUC__) && !defined(__clang__) &&                           \
     defined(__GCC_ASM_FLAG_OUTPUTS__)
-        constexpr inline bool kHasCas128 = true;
+        constexpr bool cas::available() noexcept { return true; }
 
         // 128-bit compare-and-swap via cmpxchg16b. Returns true on success; on
         // failure updates expected with the observed state (like compare_exchange).
         [[gnu::target("cx16")]]
-        inline bool cas_state(state volatile* ptr, state& expected, state desired) noexcept {
+        inline bool
+        cas::compare_exchange(state volatile* ptr, state& expected, state desired) noexcept {
             std::uint64_t       exp_low  = expected.ts_hi;
             std::uint64_t       exp_high = expected.lo;
             std::uint64_t const des_low  = desired.ts_hi;
@@ -302,7 +315,7 @@ namespace ulid26 {
         }
 
         [[nodiscard]]
-        inline bool cpu_has_cas128() {
+        inline bool cas::runtime_supported() noexcept {
             static bool const supported = [] {
                 __builtin_cpu_init();
                 return __builtin_cpu_supports("cmpxchg16b") != 0;
@@ -310,11 +323,12 @@ namespace ulid26 {
             return supported;
         }
 
-        inline void pause_hint() noexcept { __builtin_ia32_pause(); }
+        inline void cas::pause() noexcept { __builtin_ia32_pause(); }
 #elif defined(_MSC_VER) && !defined(__clang__) && defined(_M_X64)
-        constexpr inline bool kHasCas128 = true;
+        constexpr bool cas::available() noexcept { return true; }
 
-        inline bool cas_state(state volatile* ptr, state& expected, state desired) noexcept {
+        inline bool
+        cas::compare_exchange(state volatile* ptr, state& expected, state desired) noexcept {
             alignas(kStateAlignment) __int64 comparand[2] = {
                 static_cast<__int64>(expected.ts_hi), static_cast<__int64>(expected.lo)
             };
@@ -331,23 +345,24 @@ namespace ulid26 {
         }
 
         [[nodiscard]]
-        inline bool cpu_has_cas128() {
+        inline bool cas::runtime_supported() noexcept {
             return true;
         }
 
-        inline void pause_hint() noexcept { _mm_pause(); }
+        inline void cas::pause() noexcept { _mm_pause(); }
 #else
-        constexpr inline bool kHasCas128 = false;
+        constexpr bool cas::available() noexcept { return false; }
 
         [[nodiscard]]
-        inline bool cpu_has_cas128() {
+        inline bool cas::runtime_supported() noexcept {
             return false;
         }
 
-        inline void pause_hint() noexcept {}
+        inline void cas::pause() noexcept {}
 
-        // Unreachable stub: discarded if-constexpr branches still name cas_state.
-        inline bool cas_state(state volatile* ptr, state& expected, state desired) noexcept {
+        // Unreachable stub: discarded if-constexpr branches still name compare_exchange.
+        inline bool
+        cas::compare_exchange(state volatile* ptr, state& expected, state desired) noexcept {
             static_cast<void>(ptr);
             static_cast<void>(expected);
             static_cast<void>(desired);
@@ -807,7 +822,7 @@ namespace ulid26 {
         [[nodiscard]]
         std::expected<ulid, std::error_code> next() {
             auto& shared = detail::global_shared_state<R>();
-            if constexpr (detail::kHasCas128) {
+            if constexpr (detail::cas::available()) {
                 if (use_cas_) {
                     return next_cas(shared);
                 }
@@ -826,7 +841,7 @@ namespace ulid26 {
             }
             count        = std::min(count, detail::kMaxReservationCount);
             auto& shared = detail::global_shared_state<R>();
-            if constexpr (detail::kHasCas128) {
+            if constexpr (detail::cas::available()) {
                 if (use_cas_) {
                     return reserve_cas(shared, count);
                 }
@@ -839,7 +854,7 @@ namespace ulid26 {
         static std::expected<ulid, std::error_code> next_cas(detail::shared_state<R>& shared) {
             std::uint64_t now = detail::clock_ms();
             detail::state observed{};
-            detail::cas_state(&shared.data, observed, observed);
+            detail::cas::compare_exchange(&shared.data, observed, observed);
             for (;;) {
                 auto decision = detail::decide_advance(detail::to_parts(observed), now);
                 if (!decision) {
@@ -854,10 +869,10 @@ namespace ulid26 {
                     decision->needs_fresh ?
                         detail::fresh_reservation_start<R>(now, 1) :
                         detail::state{.ts_hi = decision->next.hi, .lo = decision->next.lo};
-                if (detail::cas_state(&shared.data, observed, first)) {
+                if (detail::cas::compare_exchange(&shared.data, observed, first)) {
                     return detail::assemble_ulid(first);
                 }
-                detail::pause_hint();
+                detail::cas::pause();
             }
         }
 
@@ -883,7 +898,7 @@ namespace ulid26 {
         reserve_cas(detail::shared_state<R>& shared, std::uint64_t count) {
             std::uint64_t now = detail::clock_ms();
             detail::state observed{};
-            detail::cas_state(&shared.data, observed, observed);
+            detail::cas::compare_exchange(&shared.data, observed, observed);
             for (;;) {
                 auto decision = detail::decide_advance(detail::to_parts(observed), now);
                 if (!decision) {
@@ -908,10 +923,10 @@ namespace ulid26 {
                 }
 
                 detail::state const desired = detail::offset_state(first, granted - 1);
-                if (detail::cas_state(&shared.data, observed, desired)) {
+                if (detail::cas::compare_exchange(&shared.data, observed, desired)) {
                     return detail::reservation_access::make(first, granted);
                 }
-                detail::pause_hint();
+                detail::cas::pause();
             }
         }
 
@@ -942,7 +957,7 @@ namespace ulid26 {
             return detail::reservation_access::make(first, granted);
         }
 
-        bool use_cas_ = detail::cpu_has_cas128();
+        bool use_cas_ = detail::cas::runtime_supported();
     };
 
 } // namespace ulid26
