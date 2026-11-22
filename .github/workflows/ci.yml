@@ -9,9 +9,9 @@ jobs:
   sanitize:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/nix-installer-action@v23
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
       - name: configure, build, test under ASan/UBSan
         run: nix run .#san
       - name: configure, build, test under TSan
@@ -20,9 +20,9 @@ jobs:
   coverage-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/nix-installer-action@v23
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
       - name: format, clang-tidy, configure, build, test, package
         run: nix run .#ci
       # Workflow app (see the workflows set in flake.nix): suite plus the
@@ -30,7 +30,7 @@ jobs:
       - name: configure, build, test with coverage
         run: nix run .#cov
       - name: upload tracefile
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-linux
           path: coverage-linux.json
@@ -39,7 +39,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Release validation first: fast signal before the slow coverage half —
       # a red Release skips the Debug/OCC run below entirely.
       - name: configure (MSVC)
@@ -73,7 +73,7 @@ jobs:
           --export_type cobertura:coverage-win.xml --
           ctest --test-dir build/win -C Debug --output-on-failure
       - name: upload tracefile
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-windows
           path: coverage-win.xml
@@ -82,13 +82,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: [coverage-linux, coverage-windows]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: download tracefiles
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: coverage-*
           merge-multiple: true
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - name: install gcovr
@@ -107,7 +107,7 @@ jobs:
           sed -i 's|\\|/|g; s|<source>[^<]*</source>|<source>.</source>|g; s|filename="[^"]*/|filename="|g; s|filename="|filename="ulid26/|g' coverage-win.xml
           gcovr --json-add-tracefile coverage-linux.json --cobertura-add-tracefile coverage-win.xml --root . --filter 'ulid26/.*' --merge-lines --merge-mode-functions=merge-use-line-min --print-summary --fail-under-line 93 --gcov-ignore-parse-errors negative_hits.warn_once_per_file --html-details --html-single-page static --output coverage-html.html
       - name: upload HTML report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-html
           path: coverage-html.html
@@ -116,9 +116,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/nix-installer-action@v23
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
       # Workflow app (see the workflows set in flake.nix): harness plus the
       # deterministic seed-corpus gate.
       - name: configure, build, run fuzz harness
@@ -127,7 +127,7 @@ jobs:
   baseline:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: install baseline toolchain
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++-14
       - name: configure, build, test, package on GCC 14
