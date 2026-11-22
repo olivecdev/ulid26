@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Carlos Nihelton <cn@olivec.dev>
 // SPDX-License-Identifier: MIT
-//
-// Throughput benchmarks for ulid26::ulid::to_bytes and ulid26::ulid::from_bytes:
-// same harness and methodology as bench_to_chars (deterministic corpus,
-// batch-size sweep, items-processed reporting). Run a Release build (e.g.
-// the ci preset); Debug numbers are meaningless. The corpus reuses the eight
-// known-valid seeds, parsed once, with the byte buffer spelled once at
-// startup — so each benchmark measures one direction only.
-//
-// The corpus below is literal by nature, so magic-number warnings are
-// suspended file-wide, as in the sibling benchmarks. The BENCHMARK
-// registrations and BENCHMARK_MAIN are framework-imposed names, exempted
-// inline below.
 
 // NOLINTBEGIN(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
 
@@ -34,17 +22,12 @@ namespace {
 
     constexpr std::size_t kMaxCount = 100000;
 
-    // Deterministic corpus: the same eight known-valid ULIDs as the text
-    // benchmarks (nil, max, the spec example and case/shape variants).
     constexpr std::array<std::string_view, 8> kSeeds = {
         "00000000000000000000000000", "7ZZZZZZZZZZZZZZZZZZZZZZZZZ", "01ARZ3NDEKTSV4RRFFQ69G5FAV",
         "01arz3ndektsv4rrffq69g5fav", "0123456789ABCDEFGHJKMNPQRS", "10ARZ3NDEKTSV4RRFFQ69G5FAV",
         "7HZZZZZZZZZZZZZZZZZZZZZZZZ", "00000000000000000000000001",
     };
 
-    // Corpus guards: every seed is exactly one ULID long and parses, so
-    // the benchmarks measure the byte path on pinned values (a bad seed
-    // would silently benchmark garbage instead).
     constexpr bool all_seeds_sized() {
         for (std::string_view seed : kSeeds) {
             if (seed.size() != ulid26::ulid::kTextSize) {
@@ -67,9 +50,6 @@ namespace {
     static_assert(all_seeds_parse(), "every corpus seed parses");
 
 #ifdef ULID26_HAVE_SUYASH
-    // Suyash decodes uppercase only, so the reference corpus parses the
-    // uppercased seeds: identical values on both sides, byte race on equal
-    // footing. Startup-only cost, never on the timed path.
     std::string upper_copy(std::string_view seed) {
         std::string out{seed};
         for (char& unit : out) {
@@ -86,7 +66,6 @@ namespace {
             ids.reserve(kMaxCount);
             bytes.reserve(kMaxCount * ulid26::ulid::kBinarySize);
             for (std::size_t pos = 0; pos < kMaxCount; ++pos) {
-                // Pinned valid above; .value() never throws here.
                 auto const id = ulid26::try_parse(kSeeds.at(pos % kSeeds.size())).value();
                 ids.push_back(id);
                 std::array<std::byte, ulid26::ulid::kBinarySize> spelled{};
@@ -107,9 +86,6 @@ namespace {
                     ref_bytes.push_back(unit);
                 }
             }
-            // Agreement gate: identical values must spell identical bytes, or
-            // the head-to-head is meaningless. Suyash lays out timestamp-first
-            // big-endian, exactly like to_bytes.
             agrees = true;
             for (std::string_view seed : kSeeds) {
                 std::array<std::byte, ulid26::ulid::kBinarySize> ours_spelled{};
@@ -216,10 +192,7 @@ namespace {
     }
 #endif
 
-    // Registration globals and the main entry are framework-imposed names;
-    // the registrar objects are also allowed to throw at startup.
     // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables,bugprone-throwing-static-initialization,cert-err58-cpp)
-    // Batch-size sweep: L1-resident (1024), L2-resident (10k), LLC-resident (100k).
     BENCHMARK(bench_to_bytes)->Args({1024})->Args({10000})->Args({100000});
     BENCHMARK(bench_from_bytes)->Args({1024})->Args({10000})->Args({100000});
 #ifdef ULID26_HAVE_SUYASH

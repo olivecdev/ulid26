@@ -1,3 +1,14 @@
+```text
+             ░██ ░██       ░██  ░██████   ░██████
+             ░██           ░██ ░██   ░██ ░██   ░██
+  ░██    ░██ ░██ ░██ ░████████       ░██ ░██
+  ░██    ░██ ░██ ░██░██    ░██   ░█████  ░███████
+  ░██    ░██ ░██ ░██░██    ░██  ░██      ░██   ░██
+  ░██   ░███ ░██ ░██░██   ░███ ░██       ░██   ░██
+   ░█████░██ ░██ ░██ ░█████░██ ░████████  ░██████
+
+```
+
 # ulid26
 
 > Universally Unique Lexicographically Sortable Identifiers for C++23.
@@ -162,6 +173,13 @@ standard library, we do not interfere with that.
 It is safe from any thread. It is a convenience API for one-off generation: do not call it in a loop;
 for more than one id, take a reservation from a generator.
 
+```cpp
+ulid26::ulid id = ulid26::generate();
+
+// Same, with an explicit engine (see Custom entropy engines below).
+ulid26::ulid other = ulid26::generate<ulid26::system_rng>();
+```
+
 ### Timestamp range
 
 The timestamp field is 48 bits. If the system clock reports a value beyond that range,
@@ -169,14 +187,6 @@ The timestamp field is 48 bits. If the system clock reports a value beyond that 
 channel. Monotonic generators do **not** saturate: they fail closed with `errc::overflow` instead of
 pretending an unrepresentable clock produced a valid creation time. This boundary is not reachable
 until the year 10889.
-
-
-```cpp
-ulid26::ulid id = ulid26::generate();
-
-// Same, with an explicit engine (see Custom entropy engines below).
-ulid26::ulid other = ulid26::generate<ulid26::system_rng>();
-```
 
 ### Monotonic generators
 
@@ -447,12 +457,15 @@ merge (pip gcovr), which need no Nix. Run from the repo root:
 
 | workflow | command | what it does |
 |---|---|---|
-| `ci` | `nix run .#ci` | clang-format gate, then Release configure, build, test, package |
+| `ci` | `nix run .#ci` | clang-format and clang-tidy gates, then Release configure, build, test, package |
 | `san` | `nix run .#san` | ASan/UBSan suite |
 | `tsan` | `nix run .#tsan` | TSan suite |
 | `cov` | `nix run .#cov` | gcov suite plus the Linux tracefile |
 | `fuzz` | `nix run .#fuzz` | libFuzzer harness plus the deterministic seed-corpus gate |
 | `bench` | `nix run .#bench` | Release benchmark matrix (ten repetitions, aggregates only; extra args forward to every suite; `ULID26_BENCH_CPU` pins CPUs, default 2, empty means unpinned) |
+
+The `ci` gate formats all sources, then runs clang-tidy over the test translation units (which
+include every library header); benchmark and fuzz sources stay out of clang-tidy.
 
 `nix develop` drops into the interactive shell carrying the same toolchain.
 

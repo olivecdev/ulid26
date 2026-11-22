@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
-      - name: format check, configure, build, test, package
+      - name: format, clang-tidy, configure, build, test, package
         run: nix run .#ci
       # Workflow app (see the workflows set in flake.nix): suite plus the
       # Linux tracefile for the merge.

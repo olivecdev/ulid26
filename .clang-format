@@ -1,14 +1,16 @@
-#                                                        
-#       ░▓▓▓▒  ░█████           █                    █   
-#        ▒▒▒█▒ █▓   █           █                    █   
-#            █ █    █         █████   ███   ▒███▒  █████ 
-#            █▒█▒   █           █    ▓▓ ▒█  █▒ ░█    █   
-#       ░█████▒░█████           █    █   █  █▒░      █   
-#        ░░░░█▒ █▒  █   ███     █    █████  ░███▒    █   
-#            █░ █   █           █    █         ▒█    █   
-#           ▓█ ▒▓   █           █░   ▓▓  █  █░ ▒█    █░  
-#       ░████  █░   █           ▒██   ███▒  ▒███▒    ▒██ 
-#                                                        
+#
+#             ░██ ░██       ░██  ░██████   ░██████
+#             ░██           ░██ ░██   ░██ ░██   ░██
+#  ░██    ░██ ░██ ░██ ░████████       ░██ ░██
+#  ░██    ░██ ░██ ░██░██    ░██   ░█████  ░███████
+#  ░██    ░██ ░██ ░██░██    ░██  ░██      ░██   ░██
+#  ░██   ░███ ░██ ░██░██   ░███ ░██       ░██   ░██
+#   ░█████░██ ░██ ░██ ░█████░██ ░████████  ░██████
+#
+#
+#   SPDX-FileCopyrightText: 2026 Carlos Nihelton <cn@olivec.dev>
+#   SPDX-License-Identifier: MIT
+#
 BasedOnStyle: LLVM
 AlignArrayOfStructures: Right
 AlignAfterOpenBracket: BlockIndent
@@ -44,14 +46,14 @@ PointerAlignment: Left
 QualifierAlignment: Custom
 QualifierOrder:
   [
-    "friend",
-    "static",
-    "constexpr",
-    "inline",
-    "type",
-    "const",
-    "volatile",
-    "restrict",
+    'friend',
+    'static',
+    'constexpr',
+    'inline',
+    'type',
+    'const',
+    'volatile',
+    'restrict',
   ]
 SeparateDefinitionBlocks: Always
 SortIncludes: CaseSensitive

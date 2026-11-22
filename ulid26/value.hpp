@@ -12,10 +12,6 @@
 //
 //   SPDX-FileCopyrightText: 2026 Carlos Nihelton <cn@olivec.dev>
 //   SPDX-License-Identifier: MIT
-//
-// ulid26/value.hpp — the self-contained value layer: error machinery, the scalar constexpr text
-// codec, the ulid type, parse, hashing and formatting. No generator machinery, so translation units
-// that only name, parse or format ids skip the generator templates entirely.
 #include <algorithm>
 #include <array>
 #include <compare>
@@ -38,9 +34,6 @@
 #include <type_traits>
 
 namespace ulid26 {
-    // A Universally Unique Lexicographically Sortable Identifier (ULID): a 48-bit millisecond
-    // timestamp followed by 80 bits of entropy. Pure value type — closed to user manipulation,
-    // trivially copyable, fully constexpr.
     class ulid;
 
     namespace detail {
@@ -53,65 +46,55 @@ namespace ulid26 {
         consteval ulid operator""_ulid(char const* text, std::size_t size);
     } // namespace literals
 
-    // Error conditions for every fallible operation in this library.
-    // Given a scoped enum can hold values outside of the defined enumerators, value-initializing
-    // this errc results in a zero-value, which is intentionally not an error.
+    /// Error conditions for fallible operations. A value-initialized errc is not an error.
     enum class errc : std::int8_t {
-        invalid_length = 1, // text input is not 26 characters
-        invalid_character,  // byte outside the Crockford base32 alphabet
-        overflow,           // value or clock exceeds the representable range
-        time_reversed,      // monotonic generator: the clock stepped backwards
-        generation_overflow // monotonic generator: entropy exhausted in one ms
+        invalid_length = 1,
+        invalid_character,
+        overflow,
+        time_reversed,
+        generation_overflow
     };
 
-    // Binary units: byte-sized integers (but never bool) plus std::byte (without dragging the
-    // cstddef header). char8_t is excluded by construction (not integral): text stays text, bytes
-    // stay bytes, and no overload set ever confuses the two domains.
+    /// Byte-sized integral types except bool and char8_t, plus std::byte.
     template <typename ByteT>
     concept std_byte = std::same_as<ByteT, std::byte> ||
                        (std::integral<ByteT> && sizeof(ByteT) == 1 && !std::same_as<ByteT, bool> &&
                         !std::same_as<ByteT, char8_t>);
 
-    // A concept to detect that a specific type is treated by the standard library as a character
-    // type, i.e. has a specialization of std::char_traits.
+    /// Character types accepted by the text API.
     template <typename CharT>
     concept std_char =
         std::same_as<CharT, char> || std::same_as<CharT, wchar_t> || std::same_as<CharT, char8_t> ||
         std::same_as<CharT, char16_t> || std::same_as<CharT, char32_t>;
-    // An output iterator writable with CharT units. Guarantees *it++ = unit (required by
-    // std::output_iterator itself), never capacity: 26 writable slots stay a documented
-    // precondition, exactly like std::copy_n.
+    /// Output iterator writable with CharT units; capacity is not checked.
     template <typename IterT, typename CharT>
     concept char_sink = std_char<CharT> && std::output_iterator<IterT, CharT>;
 
-    // Returns true if the text is a valid ULID string, false otherwise.
+    /// Returns true when text is a valid ULID.
     template <std_char CharT>
     [[nodiscard]]
     constexpr bool is_valid(std::basic_string_view<CharT> text) noexcept;
 
-    // The fallible free function constructor of the constexpr domain for public usage: returns
-    // a valid ULID or an error condition (errc). This should really be an implementation detail
-    // if error_code could be made constexpr, but they can't.
+    /// Parses text into a ULID or an errc.
     template <std_char CharT>
     [[nodiscard]]
     constexpr std::expected<ulid, errc> try_parse(std::basic_string_view<CharT> text) noexcept;
 
+    /// A 48-bit millisecond timestamp followed by 80 bits of entropy.
     class ulid {
       public:
         constexpr ulid()                                                         = default;
-        // The member order (hi, then lo) makes the defaulted comparison exactly the spec's
-        // left-to-right byte order.
+        // Member order makes the default comparison match network byte order.
         friend constexpr std::strong_ordering operator<=>(ulid left, ulid right) = default;
 
         static constexpr std::size_t kTextSize   = 26;
         static constexpr std::size_t kBinarySize = 16;
 
-        // Milliseconds since the Unix epoch.
+        /// Milliseconds since the Unix epoch.
         [[nodiscard]]
         constexpr std::uint64_t timestamp() const noexcept;
 
-        /// Binary serialization API: 16 bytes in big-endian order, any 16-bytes value is inherently
-        /// a valid ULID, thus the API is infallible.
+        /// Decodes 16 big-endian bytes. Every 16-byte value is a valid ULID.
         template <typename ByteT>
             requires std_byte<std::remove_const_t<ByteT>>
         [[nodiscard]]
@@ -119,25 +102,19 @@ namespace ulid26 {
         template <std_byte ByteT>
         constexpr void to_bytes(std::span<ByteT, kBinarySize> bytes) const noexcept;
 
-        /// Text oriented API: 26 characters in Crockford base32 alphabet, range from
-        /// "00000000000000000000000000" to "7ZZZZZZZZZZZZZZZZZZZZZZZZZ". The text API is fallible,
-        /// as not all 26-character strings are valid ULIDs. Functions returning std::error_code
-        /// cannot be made constexpr.
-        /// from_string: parses a string view into a ULID.
+        /// Parses 26 Crockford base32 characters.
         template <std_char CharT>
         [[nodiscard]]
         static std::expected<ulid, std::error_code>
         from_string(std::basic_string_view<CharT> text) noexcept;
 
-        /// from_string overload for C-style string literals (null-terminated).
         template <std_char CharT, std::size_t N>
         [[nodiscard]]
         // NOLINTNEXTLINE(*-avoid-c-arrays): This is a deduction helper for string literals.
         static std::expected<ulid, std::error_code> from_string(CharT const (&text)[N]) noexcept {
-            return from_string<CharT>(std::basic_string_view<CharT>{text, N - 1});
+            return from_string<CharT>(std::basic_string_view<CharT>{std::span{text}.data(), N - 1});
         }
 
-        /// from_string overload for owning strings (std::basic_string types).
         template <std_char CharT, typename TraitsT, typename AllocT>
         [[nodiscard]]
         static std::expected<ulid, std::error_code>
@@ -145,15 +122,11 @@ namespace ulid26 {
             return from_string<CharT>(std::basic_string_view<CharT>{text.data(), text.size()});
         }
 
-        // to_chars: Non-allocating write of the canonical 26 characters into caller storage, in any
-        // character type. This is the zero-allocation path: the client sizes the string (or
-        // array, or CharT[26]), the library only fills it. See to_string for the owning form.
+        /// Writes the canonical 26 characters into out.
         template <std_char CharT = char>
         constexpr void to_chars(std::span<CharT, kTextSize> out) const noexcept;
 
-        // to_string: convenience API to construct owning string form in any character type and
-        // allocator: exactly one allocation via resize_and_overwrite, no default-fill, no
-        // intermediate copy. Hot paths that cannot allocate use to_chars into caller storage.
+        /// Returns the canonical 26-character string.
         template <std_char CharT = char, typename AllocT = std::allocator<CharT>>
         [[nodiscard]]
         std::basic_string<CharT, std::char_traits<CharT>, AllocT>
@@ -169,67 +142,40 @@ namespace ulid26 {
         [[nodiscard]]
         static constexpr std::size_t hash_value(ulid value) noexcept;
 
-        /// Gated home of the unchecked encoding/decoding cores: operations whose preconditions
-        /// (26 writable slots, 26 characters) the caller must establish. Not exposed, nor are the
-        /// helpers that use them granted full friendship with the value type.
+        /// Unchecked text codec entry points; callers establish the size preconditions.
         template <std_char CharT>
         class unsafe {
-            // This would be impossible without the templated attorney or passkey idioms: a partial
-            // template specialization cannot be declared friend and we didn't want to write
-            // manually every possible full specialization of the formatter.
             friend struct std::formatter<ulid, CharT>;
             friend constexpr std::expected<ulid, errc>
             try_parse<>(std::basic_string_view<CharT> text) noexcept;
-            // The enclosing value type itself: to_chars delegates to the unchecked
-            // fill (the span extent is the check). External access stays gated above.
             friend class ulid;
 
-            // The unchecked cores live here, not as private members: anything that
-            // cannot or does not validate storage size is textually bounded by this
-            // class and reachable only through its friends. Defined out of line
-            // below (past namespace detail, which the cores read).
             template <typename IterT>
                 requires char_sink<IterT, CharT>
             [[nodiscard]]
             static constexpr IterT to_chars_unchecked(ulid value, IterT slot) noexcept;
 
-            // Unchecked decode core: precondition text.size() == kTextSize (established
-            // by try_parse below; narrowing re-checks length for wide input). Returns
-            // the value instead of mutating through a reference, so a failed parse
-            // leaves no half-written object behind.
+            /// Precondition: text.size() == kTextSize.
             [[nodiscard]]
             static constexpr std::expected<ulid, errc>
             try_parse_unchecked(std::basic_string_view<CharT> text) noexcept;
         };
 
       private:
-        /// Implementation
-
-        /// Internal representation is just a simple pair of uint64_ts implementing a network order
-        /// binary layout.
         std::uint64_t hi_{0}, low_{0};
 
-        /// Infallible constructor for internal use: the caller guarantees that hi and low compose a
-        /// valid ULID.
         // NOLINTNEXTLINE(*-swappable-parameters).
         constexpr ulid(std::uint64_t hi, std::uint64_t low) noexcept : hi_{hi}, low_{low} {}
 
-        /// Friends
         friend constexpr ulid max() noexcept;
 
         friend constexpr ulid min() noexcept;
 
         friend struct detail::parts_access;
 
-        /// Interoperability with the standard library: stream operators for text I/O.
         template <std_char CharT, typename Traits = std::char_traits<CharT>>
         friend std::basic_ostream<CharT, Traits>&
         operator<<(std::basic_ostream<CharT, Traits>& out, ulid value) {
-            // I wanted to use the iterator approach to implement this, but it costs about 2x for
-            // the buffered stream case (the common one):
-            // `auto sink = std::ostreambuf_iterator<CharT, Traits>{out.rdbuf()};`
-            // thus a stack array offers a much better
-            // performance.
             std::array<CharT, ulid::kTextSize> buffer{};
             value.to_chars(std::span<CharT, ulid::kTextSize>{buffer});
             return out.write(buffer.data(), static_cast<std::streamsize>(ulid::kTextSize));
@@ -238,13 +184,13 @@ namespace ulid26 {
         template <std_char CharT, typename Traits = std::char_traits<CharT>>
         friend std::basic_istream<CharT, Traits>&
         operator>>(std::basic_istream<CharT, Traits>& in, ulid& value) {
-            typename std::basic_istream<CharT, Traits>::sentry guard(in);
+            typename std::basic_istream<CharT, Traits>::sentry const guard(in);
             if (!guard) {
                 return in;
             }
             std::array<CharT, ulid::kTextSize> chars{};
             if (!in.read(chars.data(), static_cast<std::streamsize>(ulid::kTextSize))) {
-                return in; // read() already set failbit (and eofbit at end of input)
+                return in;
             }
             auto const parsed =
                 try_parse(std::basic_string_view<CharT>{chars.data(), chars.size()});
@@ -255,13 +201,12 @@ namespace ulid26 {
             }
             return in;
         }
-    }; // class ulid
+    };
 
     constexpr ulid max() noexcept { return ulid{~std::uint64_t{0}, ~std::uint64_t{0}}; }
 
     constexpr ulid min() noexcept { return ulid{}; }
 
-    // Error category for errc, following the std::error_code idiom.
     class error_category : public std::error_category {
       public:
         [[nodiscard]]
@@ -316,13 +261,11 @@ namespace ulid26 {
         constexpr inline std::size_t   kByteMask              = 0xFF;
         constexpr inline std::size_t   kTopByteShift          = 56;
         constexpr inline std::uint8_t  kMaxFirstCharValue     = '7';
-        // Entropy chars 10..12 fill hi fully; char 13 straddles the hi/lo halves.
+        // Entropy chars 10..12 fill hi; char 13 straddles the hi/lo halves.
         constexpr inline std::size_t   kEntropyHiGroups       = 3;
         constexpr inline std::size_t   kEntropySplitIndex     = 13;
         constexpr inline std::size_t   kStraddleShift         = 4;
-        // Direct group shifts for the encode path (to_chars): groups 0..2 sit
-        // in the top 15 bits of the 16 entropy_hi bits, group 3 straddles the
-        // halves, groups 4..15 fill the top 60 bits of entropy_lo.
+        // Encode shifts: groups 0..2 in hi, group 3 straddles, groups 4..15 in lo.
         constexpr inline std::size_t   kEntropyHiTop          = 11;
         constexpr inline std::size_t   kEntropyLoGroups       = 12;
         constexpr inline std::size_t   kLoTopShift            = 60;
@@ -337,9 +280,8 @@ namespace ulid26 {
             kTimestampBits + kEntropyBits == ulid::kBinarySize * kBitsPerByte,
             "timestamp and entropy must fill the binary ULID"
         );
-        // MSB of the 8-bit decode table entry is set for invalid characters.
+        // Decode table entries: MSB is the error channel, low five bits the value channel.
         constexpr inline std::uint64_t kErrorChannelMask = 0x80;
-        // The low 5 bits of the decode table entry are the value channel.
         constexpr inline std::uint64_t kValueChannelMask = 0x1F;
         constexpr inline std::uint64_t kHashSalt         = 0x9E3779B97F4A7C15ULL;
         constexpr inline std::size_t   kHashShiftLeft    = 6;
@@ -351,14 +293,9 @@ namespace ulid26 {
             "Crockford alphabet must be 32 characters long"
         );
 
-        // Bounds-checked .at() is deliberately avoided: the indices are in range by
-        // construction, and .at() is only constexpr from C++26 on (current standard libraries
-        // ship it as a DR, so .at() would tie the constexpr decode core to vendor extensions).
+        // constraints: libstdc++/libc++ pre-C++26 .at() is not constexpr; Remove with C++26.
         consteval std::array<std::uint8_t, kDecodeTableSize> make_decode_table() {
             static constexpr std::size_t kCaseOffset = 32; // 'a' - 'A'
-            // Safety bounds check: the biggest index into the array is the largest letter value
-            // in the Crockford alphabet plus the case offset, that must still be smaller than
-            // the table size.
             static_assert(
                 kCaseOffset + static_cast<std::uint8_t>(kCrockfordAlphabet.back()) <
                     kDecodeTableSize,
@@ -368,12 +305,10 @@ namespace ulid26 {
             std::array<std::uint8_t, kDecodeTableSize> table{};
             table.fill(kErrorChannelMask);
 
-            // Maps ASCII digits to their values.
             for (std::uint8_t digit = 0; digit < kDecimalDigitCount; ++digit) {
                 unsigned const index = '0' + digit;
                 table[index]         = digit;
             }
-            // Maps letters in the Crockford alphabet in both cases to their upper case values.
             auto value = static_cast<std::uint8_t>(kDecimalDigitCount);
             for (char const letter : kCrockfordAlphabet.substr(kDecimalDigitCount)) {
                 auto const upper           = static_cast<std::uint8_t>(letter);
@@ -386,9 +321,6 @@ namespace ulid26 {
 
         constexpr inline std::array<std::uint8_t, kDecodeTableSize> kDecode = make_decode_table();
 
-        // Constexpr decoding a wide string view into a narrow char array, provided it contains
-        // only valid ASCII characters, returning an error condition otherwise. Lenght assumed
-        // correct, as it's called post length check in is_valid().
         template <std_char CharT>
         [[nodiscard]]
         constexpr std::expected<std::array<char, ulid::kTextSize>, errc>
@@ -406,9 +338,7 @@ namespace ulid26 {
         }
 
         [[nodiscard]]
-        // Lenght assumed correct, as it's called post length check in is_valid().
         constexpr bool is_valid_narrowed(std::string_view text) noexcept {
-            // The first character must be 0..7 to avoid overflow.
             if (text[0] > kMaxFirstCharValue) {
                 return false;
             }
@@ -433,7 +363,7 @@ namespace ulid26 {
                         std::string_view{narrowed.data(), narrowed.size()}
                     );
                 })
-                .value_or(false); // The validation result or false if it errored.
+                .value_or(false);
         }
     }
 
@@ -441,7 +371,7 @@ namespace ulid26 {
     [[nodiscard]]
     // NOLINTNEXTLINE(*-avoid-c-arrays): This is a deduction helper for string literals.
     constexpr bool is_valid(CharT const (&text)[N]) noexcept {
-        return is_valid(std::basic_string_view<CharT>{text, N - 1});
+        return is_valid(std::basic_string_view<CharT>{std::span{text}.data(), N - 1});
     }
 
     template <std_char CharT>
@@ -451,18 +381,18 @@ namespace ulid26 {
         if constexpr (std::is_same_v<CharT, char>) {
             using namespace detail;
             std::uint64_t bad  = 0;
-            auto          fold = [&bad](std::uint64_t acc, char elem) -> std::uint64_t {
-                std::uint64_t const value = kDecode[static_cast<std::uint8_t>(elem)];
-                bad                       = bad | value; // carry validity channel
-                return (acc << kBitsPerChar) | (value & kValueChannelMask); // value channel
+            auto          fold = [&bad](std::uint64_t acc, char unit) -> std::uint64_t {
+                std::uint64_t const value = kDecode[static_cast<std::uint8_t>(unit)];
+                bad                       = bad | value;
+                return (acc << kBitsPerChar) | (value & kValueChannelMask);
             };
 
-            std::string_view tstamp = text.substr(0, kTimestampChars);
-            std::uint64_t    timestamp =
+            std::string_view const tstamp = text.substr(0, kTimestampChars);
+            std::uint64_t          timestamp =
                 std::accumulate(tstamp.begin(), tstamp.end(), std::uint64_t{0}, fold);
 
-            std::string_view entropy_h = text.substr(kTimestampChars, kEntropyHiGroups);
-            std::uint64_t    entropy_high =
+            std::string_view const entropy_h = text.substr(kTimestampChars, kEntropyHiGroups);
+            std::uint64_t          entropy_high =
                 std::accumulate(entropy_h.begin(), entropy_h.end(), std::uint64_t{0}, fold);
 
             std::uint64_t const straddle_value =
@@ -472,8 +402,8 @@ namespace ulid26 {
             }
             entropy_high = (entropy_high << 1U) | (straddle_value >> kStraddleShift);
 
-            std::string_view entropy_l   = text.substr(kEntropySplitIndex + 1);
-            std::uint64_t    entropy_low = std::accumulate(
+            std::string_view const entropy_l   = text.substr(kEntropySplitIndex + 1);
+            std::uint64_t          entropy_low = std::accumulate(
                 entropy_l.begin(), entropy_l.end(), straddle_value & kLowNibble, fold
             );
 
@@ -500,9 +430,7 @@ namespace ulid26 {
     }
 
     namespace literals {
-        // Compile-time-checked literal for test vectors and sentinels:
-        // invalid text fails the build at the literal, so constants spell
-        // themselves (using namespace ulid26::literals to opt in).
+        /// Compile-time literal; invalid text fails the build.
         [[nodiscard]]
         consteval ulid operator""_ulid(char const* text, std::size_t size) {
             if (size != ulid::kTextSize) {
@@ -532,7 +460,7 @@ namespace ulid26 {
     [[nodiscard]]
     // NOLINTNEXTLINE(*-avoid-c-arrays): This is a deduction helper for string literals.
     constexpr std::expected<ulid, errc> try_parse(CharT const (&text)[N]) noexcept {
-        return try_parse(std::basic_string_view<CharT>{text, N - 1});
+        return try_parse(std::basic_string_view<CharT>{std::span{text}.data(), N - 1});
     }
 
     template <std_char CharT>
@@ -573,7 +501,6 @@ namespace ulid26 {
 
     template <std_char CharT>
     constexpr void ulid::to_chars(std::span<CharT, ulid::kTextSize> out) const noexcept {
-        // The span extent is the check; the fill itself is the unchecked core.
         [[maybe_unused]]
         auto iter = unsafe<CharT>::to_chars_unchecked(*this, out.begin());
     }
@@ -585,13 +512,9 @@ namespace ulid26 {
                                      (value.hi_ >> detail::kHashShiftRight);
         std::uint64_t const folded = value.hi_ ^ mixed;
         if constexpr (sizeof(std::size_t) < sizeof(std::uint64_t)) {
-            // Fold the full 64-bit mix before narrowing so 32-bit platforms
-            // remain sensitive to the upper timestamp and entropy bits.
             auto const folded32 = static_cast<std::uint32_t>(folded ^ (folded >> 32U));
             return folded32;
         }
-        // Exact where size_t is 64 bits; the 32-bit narrowing above returns
-        // first, so this cast only silences -Wconversion there.
         return static_cast<std::size_t>(folded);
     }
 
@@ -600,15 +523,12 @@ namespace ulid26 {
     [[nodiscard]]
     constexpr ulid ulid::from_bytes(std::span<ByteT, kBinarySize> bytes) noexcept {
         auto get_uint64 = [](std::span<ByteT const, detail::kHalfLength> octets) -> std::uint64_t {
-            return std::accumulate(
-                octets.begin(), octets.end(), std::uint64_t{0}, [](std::uint64_t acc, ByteT elem) {
-                    // We need to go unsigned before expanding into uint64_t, otherwise the sign bit
-                    // (if ByteT is signed) would propagate and fill the upper bits of the uint64_t
-                    // to make it "negative" in two's complement.
-                    return (acc << detail::kBitsPerByte) |
-                           static_cast<std::uint64_t>(static_cast<std::uint8_t>(elem));
-                }
-            );
+            std::uint64_t value = 0;
+            for (ByteT const octet : octets) {
+                value = (value << detail::kBitsPerByte) |
+                        static_cast<std::uint64_t>(static_cast<std::uint8_t>(octet));
+            }
+            return value;
         };
         return ulid{
             get_uint64(bytes.template first<detail::kHalfLength>()),
@@ -630,7 +550,6 @@ namespace ulid26 {
     }
 } // namespace ulid26
 
-// Interoperability with the standard library:
 namespace std {
     template <>
     struct is_error_code_enum<ulid26::errc> : true_type {};

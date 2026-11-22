@@ -1,24 +1,16 @@
 #
-#       ░▓▓▓▒  ░█████           █                    █
-#        ▒▒▒█▒ █▓   █           █                    █
-#            █ █    █         █████   ███   ▒███▒  █████
-#            █▒█▒   █           █    ▓▓ ▒█  █▒ ░█    █
-#       ░█████▒░█████           █    █   █  █▒░      █
-#        ░░░░█▒ █▒  █   ███     █    █████  ░███▒    █
-#            █░ █   █           █    █         ▒█    █
-#           ▓█ ▒▓   █           █░   ▓▓  █  █░ ▒█    █░
-#       ░████  █░   █           ▒██   ███▒  ▒███▒    ▒██
+#             ░██ ░██       ░██  ░██████   ░██████
+#             ░██           ░██ ░██   ░██ ░██   ░██
+#  ░██    ░██ ░██ ░██ ░████████       ░██ ░██
+#  ░██    ░██ ░██ ░██░██    ░██   ░█████  ░███████
+#  ░██    ░██ ░██ ░██░██    ░██  ░██      ░██   ░██
+#  ░██   ░███ ░██ ░██░██   ░███ ░██       ░██   ░██
+#   ░█████░██ ░██ ░██ ░█████░██ ░████████  ░██████
 #
-# NOTE on the cppcoreguidelines-pro-bounds-* denylist entries below: those
-# checks fire on every operator[] whose index is not a constant expression,
-# with no range analysis. Every subscript in this codebase is length-checked
-# and loop-bounded by construction, reviewed at each site, and covered by
-# the constexpr proofs, the sanitizer matrix and the fuzzer -- so their
-# entire output here was suppressed-after-review. Revisit when the toolchain
-# reaches C++26 constexpr std::array::at, which makes the honest fix
-# (checked access) available. (Keep comments out of the Checks scalar
-# itself: '#' lines inside it silently break the denylist.)
-Checks: "*,
+#
+#   SPDX-FileCopyrightText: 2026 Carlos Nihelton <cn@olivec.dev>
+#   SPDX-License-Identifier: MIT
+Checks: '*,
   -abseil-*,
   -altera-*,
   -android-*,
@@ -36,7 +28,7 @@ Checks: "*,
   -openmp-*,
   -zircon-*,
   -*-avoid-do-while,
-  -*-trailing-return-type"
+  -*-trailing-return-type'
 
 CheckOptions:
   misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic: true
@@ -62,18 +54,17 @@ CheckOptions:
   # std::errc-mirror enumerators (invalid_length, ...) stay lower_case,
   # matching the std::errc idiom instead of the k-prefixed house style.
   readability-identifier-naming.EnumConstantCase: lower_case
-  readability-identifier-naming.EnumConstantPrefix: ""
+  readability-identifier-naming.EnumConstantPrefix: ''
   readability-identifier-naming.TemplateParamterCase: CamelCase
   readability-identifier-naming.ConstantCase: CamelCase
   # I want most constants prefixed with 'k'
   readability-identifier-naming.ConstantPrefix: k
   # Except for locals, as they look like variables in the end.
-  readability-identifier-naming.LocalConstantPrefix: ""
+  readability-identifier-naming.LocalConstantPrefix: ''
 
   # Short conventional names are acceptable (those are regexes, not lists)
-  readability-identifier-length.IgnoredExceptionVariableNames: ^(err|e|x|ex)$
-  readability-identifier-length.IgnoredVariableNames: ^(err|fd|h|hi|hr|id|in|lo|ok|res|cb)$
-  readability-identifier-length.IgnoredParameterNames: ^(err|fd|h|hi|hr|id|in|lo|ok|res|cb)$
+  readability-identifier-length.IgnoredVariableNames: ^(err|hi|id|in|lo|ok|res)$
+  readability-identifier-length.IgnoredParameterNames: ^(err|hi|id|in|lo|ok|res)$
 
 # Regex for which headers clang-tidy should emit warnings. It always emits warnings from .cpp files.
-HeaderFilterRegex: ".*hpp$"
+HeaderFilterRegex: '.*hpp$'

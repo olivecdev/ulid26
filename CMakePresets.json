@@ -34,6 +34,20 @@
       }
     },
     {
+      "name": "tidy",
+      "displayName": "Clang tidy",
+      "description": "Clang Debug test build for clang-tidy; benchmarks and fuzz stay off.",
+      "inherits": "base",
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "ULID26_BUILD_BENCHMARKS": "OFF",
+        "ULID26_BUILD_FUZZ": "OFF"
+      }
+    },
+    {
       "name": "san",
       "displayName": "Sanitizers",
       "description": "Debug + ASan/UBSan for the test suite (GCC/Clang only).",
@@ -116,6 +130,10 @@
     {
       "name": "ci-build",
       "configurePreset": "ci"
+    },
+    {
+      "name": "tidy-build",
+      "configurePreset": "tidy"
     },
     {
       "name": "san-build",
@@ -202,6 +220,13 @@
         { "type": "build", "name": "ci-build" },
         { "type": "test", "name": "ci-test" },
         { "type": "package", "name": "ci-package" }
+      ]
+    },
+    {
+      "name": "tidy",
+      "steps": [
+        { "type": "configure", "name": "tidy" },
+        { "type": "build", "name": "tidy-build" }
       ]
     },
     {

@@ -1,9 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Carlos Nihelton <cn@olivec.dev>
 // SPDX-License-Identifier: MIT
-//
-// Unit tests for the generation layer: one-shot generation, both monotonic
-// generators, reservations as ranges, the best-effort capacity contract and
-// the pure state-machine decisions. boost-ext/ut drives the runtime cases.
 
 // NOLINTBEGIN(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
 
@@ -13,11 +9,13 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <limits>
+#include <random>
 #include <ranges>
-#include <span>
 #include <thread>
 #include <ulid26/generators.hpp>
+#include <ulid26/value.hpp>
 #include <utility>
 #include <vector>
 
@@ -26,7 +24,7 @@ namespace {
     constexpr std::uint64_t kEntropyMax = ~std::uint64_t{0};
     constexpr std::uint64_t kHighMask   = 0xFFFF;
 
-    struct engine_failure {};
+    struct engine_failure : std::exception {};
 
     class throwing_rng {
       public:
@@ -36,7 +34,7 @@ namespace {
 
         static constexpr result_type max() { return ~result_type{0}; }
 
-        result_type operator()() {
+        result_type operator()() const {
             if (fail) {
                 throw engine_failure{};
             }
@@ -47,16 +45,13 @@ namespace {
     };
 
     [[nodiscard]]
-    ulid26::ulid
-    make_ulid(std::uint64_t timestamp, std::uint64_t entropy_hi, std::uint64_t entropy_lo) {
-        std::array<std::uint8_t, ulid26::ulid::kBinarySize> bytes{};
-        std::uint64_t const hi = (timestamp << 16) | (entropy_hi & kHighMask);
-        for (std::size_t i = 0; i < 8; ++i) {
-            bytes[i]     = static_cast<std::uint8_t>((hi >> (56 - (i * 8))) & 0xFF);
-            bytes[8 + i] = static_cast<std::uint8_t>((entropy_lo >> (56 - (i * 8))) & 0xFF);
-        }
-        return ulid26::ulid::from_bytes(
-            std::span<std::uint8_t const, ulid26::ulid::kBinarySize>{bytes}
+    ulid26::ulid make_ulid(std::uint64_t timestamp, ulid26::detail::parts entropy) {
+        constexpr std::uint64_t kTimestampShift = 16;
+        return ulid26::detail::assemble_ulid(
+            ulid26::detail::parts{
+                .hi = (timestamp << kTimestampShift) | (entropy.hi & kHighMask),
+                .lo = entropy.lo,
+            }
         );
     }
 
@@ -69,34 +64,34 @@ namespace {
 
 } // namespace
 
-int main() {
+namespace {
     using namespace boost::ut;
 
-    "single-shot generation"_test = [] {
+    void test_single_shot_generation() {
         auto const first  = ulid26::generate();
         auto const second = ulid26::generate();
         expect(first != second) << "fresh entropy per one-shot";
         expect(first.timestamp() > 0U) << "timestamp comes from the clock";
         expect(first.timestamp() <= second.timestamp() + 1U) << "timestamps do not run wild";
-    };
+    }
 
-    "custom engine one-shot"_test = [] {
+    void test_custom_engine_one_shot() {
         bool threw = false;
         try {
             (void)ulid26::generate<throwing_rng>();
         } catch (engine_failure const&) { threw = true; }
         expect(threw) << "generate uses the requested engine";
-    };
+    }
 
-    "seeded engine is deterministic"_test = [] {
+    void test_seeded_engine_is_deterministic() {
         ulid26::default_rng left{42};
         ulid26::default_rng right{42};
         for (std::size_t i = 0; i < 16; ++i) {
             expect(left() == right()) << "same seed, same word stream";
         }
-    };
+    }
 
-    "RFC 8439 ChaCha20 block vector"_test = [] {
+    void test_rfc_8439_chacha20_block_vector() {
         constexpr std::array<std::uint32_t, 16> input = {
             0x61707865U, 0x3320646EU, 0x79622D32U, 0x6B206574U, 0x03020100U, 0x07060504U,
             0x0B0A0908U, 0x0F0E0D0CU, 0x13121110U, 0x17161514U, 0x1B1A1918U, 0x1F1E1D1CU,
@@ -109,11 +104,10 @@ int main() {
         };
         expect(ulid26::detail::chacha20_block(input) == expected)
             << "RFC 8439 section 2.3.2 block vector";
-    };
+    }
 
-    "reservation count is capped at int64 max"_test = [] {
-        constexpr std::uint64_t kCap =
-            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+    void test_reservation_count_is_capped_at_int64_max() {
+        constexpr auto kCap = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
         ulid26::unsynchronized_generator<> generator;
         auto const block = generator.reserve(std::numeric_limits<std::uint64_t>::max());
         expect(block.has_value()) << "oversized request still succeeds";
@@ -122,9 +116,9 @@ int main() {
             expect(block->end() - block->begin() == std::numeric_limits<std::int64_t>::max())
                 << "range difference is representable";
         }
-    };
+    }
 
-    "local burst is strictly increasing"_test = [] {
+    void test_local_burst_is_strictly_increasing() {
         ulid26::unsynchronized_generator<> generator;
         auto const                         first = generator.next();
         expect(first.has_value()) << "first id";
@@ -141,16 +135,18 @@ int main() {
             expect(*current > previous) << "strictly increasing";
             previous = *current;
         }
-    };
+    }
 
-    "entropy exhaustion fails next closed"_test = [] {
+    void test_entropy_exhaustion_fails_next_closed() {
         constexpr int kAttempts = 16;
         bool          observed  = false;
         for (int attempt = 0; attempt < kAttempts && !observed; ++attempt) {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
             auto const                         now = ulid26::generate().timestamp();
-            ulid26::unsynchronized_generator<> generator{make_ulid(now, kHighMask, kEntropyMax)};
-            auto const                         single = generator.next();
+            ulid26::unsynchronized_generator<> generator{
+                make_ulid(now, {.hi = kHighMask, .lo = kEntropyMax})
+            };
+            auto const single = generator.next();
             if (single) {
                 continue;
             }
@@ -161,16 +157,18 @@ int main() {
             observed = true;
         }
         expect(observed) << "same-millisecond exhaustion observed";
-    };
+    }
 
-    "exhausted reservation is empty success"_test = [] {
+    void test_exhausted_reservation_is_empty_success() {
         constexpr int kAttempts = 16;
         bool          observed  = false;
         for (int attempt = 0; attempt < kAttempts && !observed; ++attempt) {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
             auto const                         now = ulid26::generate().timestamp();
-            ulid26::unsynchronized_generator<> generator{make_ulid(now, kHighMask, kEntropyMax)};
-            auto const                         block = generator.reserve(1);
+            ulid26::unsynchronized_generator<> generator{
+                make_ulid(now, {.hi = kHighMask, .lo = kEntropyMax})
+            };
+            auto const block = generator.reserve(1);
             expect(block.has_value()) << "exhausted reservation is success";
             if (!block) {
                 return;
@@ -180,9 +178,9 @@ int main() {
             }
         }
         expect(observed) << "same-millisecond empty grant observed";
-    };
+    }
 
-    "reservation can be short near entropy exhaustion"_test = [] {
+    void test_reservation_can_be_short_near_entropy_exhaustion() {
         constexpr std::uint64_t kRequested = 10;
         constexpr std::uint64_t kGranted   = 3;
         constexpr int           kAttempts  = 8;
@@ -191,7 +189,7 @@ int main() {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
             auto const                         now = ulid26::generate().timestamp();
             ulid26::unsynchronized_generator<> generator{
-                make_ulid(now, kHighMask, kEntropyMax - kGranted)
+                make_ulid(now, {.hi = kHighMask, .lo = kEntropyMax - kGranted})
             };
             auto const block = generator.reserve(kRequested);
             expect(block.has_value()) << "short reservation must succeed";
@@ -203,22 +201,22 @@ int main() {
             }
             observed = true;
             expect(block->first().timestamp() == now) << "short grant stays in one millisecond";
-            expect(block->last() == make_ulid(now, kHighMask, kEntropyMax))
+            expect(block->last() == make_ulid(now, {.hi = kHighMask, .lo = kEntropyMax}))
                 << "short grant stops at entropy maximum";
         }
         expect(observed) << "same-millisecond short grant observed";
-    };
+    }
 
-    "custom engine generator"_test = [] {
+    void test_custom_engine_generator() {
         ulid26::unsynchronized_generator<throwing_rng> generator;
         bool                                           threw = false;
         try {
-            (void)generator.reserve(1);
+            expect(!generator.reserve(1).has_value()) << "reservation should not succeed";
         } catch (engine_failure const&) { threw = true; }
         expect(threw) << "reservation uses the generator's engine";
-    };
+    }
 
-    "reservation range contract"_test = [] {
+    void test_reservation_range_contract() {
         ulid26::unsynchronized_generator<> generator;
         constexpr std::uint64_t            kCount = 64;
         auto const                         block  = generator.reserve(kCount);
@@ -251,9 +249,9 @@ int main() {
 
         auto const after = generator.next();
         expect(after.has_value() && *after > block->last()) << "next continues after the block";
-    };
+    }
 
-    "reservation random access"_test = [] {
+    void test_reservation_random_access() {
         ulid26::unsynchronized_generator<> generator;
         auto const                         block = generator.reserve(8);
         expect(block.has_value()) << "reservation succeeds";
@@ -275,9 +273,9 @@ int main() {
         auto last = end;
         --last;
         expect(*last == block->last()) << "reverse step reaches the last id";
-    };
+    }
 
-    "moving a generator re-seeds the source"_test = [] {
+    void test_moving_a_generator_leaves_the_source_assignable() {
         ulid26::unsynchronized_generator<> source;
         auto const                         first = source.next();
         expect(first.has_value()) << "source generates";
@@ -287,11 +285,12 @@ int main() {
         ulid26::unsynchronized_generator<> destination{std::move(source)};
         auto const                         second = destination.next();
         expect(second.has_value() && *second > *first) << "destination continues the sequence";
+        source           = ulid26::unsynchronized_generator<>{};
         auto const third = source.next();
-        expect(third.has_value()) << "moved-from generator reseeds";
-    };
+        expect(third.has_value()) << "moved-from generator remains assignable";
+    }
 
-    "reservation composes with views"_test = [] {
+    void test_reservation_composes_with_views() {
         ulid26::unsynchronized_generator<> generator;
         auto const                         block = generator.reserve(16);
         expect(block.has_value()) << "reservation succeeds";
@@ -305,9 +304,9 @@ int main() {
         }
         expect(taken == expected) << "take matches the reservation prefix";
         expect(std::ranges::is_sorted(taken)) << "take preserves order";
-    };
+    }
 
-    "zero reservation is empty success"_test = [] {
+    void test_zero_reservation_is_empty_success() {
         ulid26::unsynchronized_generator<> generator;
         auto const                         block = generator.reserve(0);
         expect(block.has_value()) << "zero is not an error";
@@ -325,9 +324,9 @@ int main() {
         if (shared_block) {
             expect(shared_block->empty()) << "shared zero-sized block";
         }
-    };
+    }
 
-    "state machine overflow and carry"_test = [] {
+    void test_state_machine_overflow_and_carry() {
         using ulid26::detail::decide_advance;
         std::uint64_t volatile at_modulus = ulid26::detail::kTimestampModulus;
         auto const overflow               = decide_advance({}, at_modulus);
@@ -342,9 +341,9 @@ int main() {
         if (carry) {
             expect(carry->next.hi == 1 && carry->next.lo == 0) << "carry increments the high half";
         }
-    };
+    }
 
-    "clock regression fails closed"_test = [] {
+    void test_clock_regression_fails_closed() {
         auto const future = ulid26::try_parse("7ZZZZZZZZZ0000000000000000");
         expect(future.has_value()) << "future vector parses";
         if (!future) {
@@ -363,9 +362,9 @@ int main() {
             expect(block.error() == ulid26::make_error_code(ulid26::errc::time_reversed))
                 << "same error";
         }
-    };
+    }
 
-    "shared reservations are disjoint across threads"_test = [] {
+    void test_shared_reservations_are_disjoint_across_threads() {
         constexpr std::size_t                  kThreads   = 4;
         constexpr std::uint64_t                kPerThread = 64;
         std::vector<std::vector<ulid26::ulid>> output(kThreads);
@@ -395,9 +394,9 @@ int main() {
         std::ranges::sort(all);
         expect(std::adjacent_find(all.begin(), all.end()) == all.end())
             << "blocks are disjoint across threads";
-    };
+    }
 
-    "shared handles share one sequence"_test = [] {
+    void test_shared_handles_share_one_sequence() {
         ulid26::shared_generator<> left;
         ulid26::shared_generator<> right;
         auto const                 first  = left.reserve(1);
@@ -406,9 +405,9 @@ int main() {
         if (first && second && !first->empty() && !second->empty()) {
             expect(first->last() < second->first()) << "separate handles advance one sequence";
         }
-    };
+    }
 
-    "shared clock regression fails closed"_test = [] {
+    void test_shared_clock_regression_fails_closed() {
         auto const future = ulid26::try_parse("7ZZZZZZZZZ0000000000000000");
         expect(future.has_value()) << "future vector parses";
         if (!future) {
@@ -432,9 +431,9 @@ int main() {
                 << "shared same error";
         }
         shared.data = {};
-    };
+    }
 
-    "shared next shares one sequence"_test = [] {
+    void test_shared_next_shares_one_sequence() {
         ulid26::shared_generator<> left;
         ulid26::shared_generator<> right;
         auto const                 first  = left.next();
@@ -450,7 +449,42 @@ int main() {
         if (block && after && !block->empty()) {
             expect(block->last() < *after) << "next continues after a reservation";
         }
-    };
+    }
+
+    void run_tests() {
+        "single-shot generation"_test         = test_single_shot_generation;
+        "custom engine one-shot"_test         = test_custom_engine_one_shot;
+        "seeded engine is deterministic"_test = test_seeded_engine_is_deterministic;
+        "RFC 8439 ChaCha20 block vector"_test = test_rfc_8439_chacha20_block_vector;
+        "reservation count is capped at int64 max"_test =
+            test_reservation_count_is_capped_at_int64_max;
+        "local burst is strictly increasing"_test     = test_local_burst_is_strictly_increasing;
+        "entropy exhaustion fails next closed"_test   = test_entropy_exhaustion_fails_next_closed;
+        "exhausted reservation is empty success"_test = test_exhausted_reservation_is_empty_success;
+        "reservation can be short near entropy exhaustion"_test =
+            test_reservation_can_be_short_near_entropy_exhaustion;
+        "custom engine generator"_test    = test_custom_engine_generator;
+        "reservation range contract"_test = test_reservation_range_contract;
+        "reservation random access"_test  = test_reservation_random_access;
+        "moving a generator leaves the source assignable"_test =
+            test_moving_a_generator_leaves_the_source_assignable;
+        "reservation composes with views"_test   = test_reservation_composes_with_views;
+        "zero reservation is empty success"_test = test_zero_reservation_is_empty_success;
+        "state machine overflow and carry"_test  = test_state_machine_overflow_and_carry;
+        "clock regression fails closed"_test     = test_clock_regression_fails_closed;
+        "shared reservations are disjoint across threads"_test =
+            test_shared_reservations_are_disjoint_across_threads;
+        "shared handles share one sequence"_test    = test_shared_handles_share_one_sequence;
+        "shared clock regression fails closed"_test = test_shared_clock_regression_fails_closed;
+        "shared next shares one sequence"_test      = test_shared_next_shares_one_sequence;
+    }
+} // namespace
+
+int main() {
+    try {
+        run_tests();
+    } catch (...) { return 1; }
+    return 0;
 }
 
 // NOLINTEND(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)

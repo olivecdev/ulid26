@@ -1,19 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Carlos Nihelton <cn@olivec.dev>
 // SPDX-License-Identifier: MIT
-//
-// Throughput benchmarks for the generation layer: one-shot generate(), the
-// two monotonic next() flavors, and reserve()+drain at several block sizes.
-// Same harness and methodology as the sibling benchmarks (items-processed
-// reporting). Run a Release build (e.g. the bench preset); Debug numbers are
-// meaningless.
-//
-// Every timed loop consumes the produced value's timestamp so the compiler
-// cannot drop the generation work. The reserve benchmarks include draining
-// the returned range: the reservation itself is one commit, while iteration
-// is local arithmetic.
-//
-// The BENCHMARK registrations and BENCHMARK_MAIN are framework-imposed names,
-// exempted inline below.
 
 // NOLINTBEGIN(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
 
@@ -82,8 +68,6 @@ namespace {
         bench_reserve<ulid26::shared_generator<>>(state);
     }
 
-    // Registration globals and the main entry are framework-imposed names;
-    // the registrar objects are also allowed to throw at startup.
     // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables,bugprone-throwing-static-initialization,cert-err58-cpp)
     BENCHMARK(bench_generate);
     BENCHMARK(bench_unsync_next);

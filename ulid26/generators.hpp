@@ -12,17 +12,6 @@
 //
 //   SPDX-FileCopyrightText: 2026 Carlos Nihelton <cn@olivec.dev>
 //   SPDX-License-Identifier: MIT
-//
-// ulid26/generators.hpp — entropy engines, one-shot generation, the two
-// monotonic generator flavors, and reservations.
-//
-// The generation layer over <ulid26/value.hpp>: anything that mints ids lives
-// here. Pulls <mutex>, <random> and <chrono>; translation units that only name,
-// parse or format ids include <ulid26/value.hpp> directly to keep their compile
-// times down. Engines are standard uniform random bit generators
-// (std::mt19937_64 plugs in with zero glue); the two in-house engines are
-// default_rng (ChaCha20, seeded once per thread from the OS) and system_rng
-// (std::random_device per draw).
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -41,13 +30,12 @@
 #include <utility>
 
 #if defined(_MSC_VER) && !defined(__clang__) && defined(_M_X64)
-#include <intrin.h> // _InterlockedCompareExchange128 + _mm_pause
+#include <intrin.h>
 #endif
 
 namespace ulid26 {
 
-    // A standard uniform random bit generator, structurally. Standard engines
-    // (std::mt19937_64, std::philox4x32 under C++26) satisfy it with zero glue.
+    /// Standard uniform random bit generator contract.
     template <typename R>
     concept entropy_engine = std::default_initializable<R> && std::invocable<R&> &&
                              std::unsigned_integral<std::invoke_result_t<R&>> && requires {
@@ -78,16 +66,12 @@ namespace ulid26 {
         constexpr inline int         kRot7             = 7;
 
         // NOLINTBEGIN(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
-        // ChaCha20 sigma constants, "expand 32-byte k" little-endian (RFC 8439 §2.3).
         constexpr inline std::array<std::uint32_t, 4> kSigma = {
             0x61707865U, 0x3320646EU, 0x79622D32U, 0x6B206574U
         };
 
         // NOLINTEND(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
 
-        // The ChaCha20 block function from RFC 8439 section 2.3. The input is
-        // constants | key | counter | nonce; the result already includes the
-        // final addition of the input state.
         [[nodiscard]]
         constexpr std::array<std::uint32_t, kStateWords>
         chacha20_block(std::array<std::uint32_t, kStateWords> const& input) noexcept {
@@ -97,6 +81,7 @@ namespace ulid26 {
             auto&      s02     = working.at(2);
             auto&      s03     = working.at(3);
             auto&      s04     = working.at(4);
+            // NOLINTBEGIN(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
             auto&      s05     = working.at(5);
             auto&      s06     = working.at(6);
             auto&      s07     = working.at(7);
@@ -108,6 +93,7 @@ namespace ulid26 {
             auto&      s13     = working.at(13);
             auto&      s14     = working.at(14);
             auto&      s15     = working.at(15);
+            // NOLINTEND(readability-magic-numbers,cppcoreguidelines-avoid-magic-numbers)
             auto const quarter = [](std::uint32_t& first, std::uint32_t& second,
                                     std::uint32_t& third, std::uint32_t& fourth) {
                 first  += second;
@@ -139,9 +125,7 @@ namespace ulid26 {
             return working;
         }
 
-        // The two 64-bit halves of the value. hi holds the 48-bit timestamp in
-        // its high bits and the high 16 entropy bits in its low bits; lo holds
-        // the low 64 entropy bits.
+        // hi = timestamp << 16 | entropy_hi; lo = entropy_lo.
         struct parts {
             std::uint64_t hi = 0;
             std::uint64_t lo = 0;
@@ -177,20 +161,16 @@ namespace ulid26 {
             auto const millis =
                 std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
             if (millis < 0) {
-                // Pre-epoch clocks clamp; monotonic generators still fail closed.
                 return 0;
             }
             return static_cast<std::uint64_t>(millis);
         }
 
-        // Result of the monotonic decision: either fresh entropy must be drawn
-        // (fresh == true, next unused) or next already holds the successor.
         struct advance {
             parts next{};
             bool  needs_fresh = false;
         };
 
-        // The decision is a pure function of the observed halves and the clock.
         [[nodiscard]]
         constexpr std::expected<advance, errc>
         decide_advance(parts current, std::uint64_t now) noexcept {
@@ -215,9 +195,7 @@ namespace ulid26 {
             return std::unexpected(errc::time_reversed);
         }
 
-        // Shared 128-bit generator state: hi holds the timestamp shifted left
-        // with the high 16 entropy bits, lo holds the low 64 entropy bits.
-        // 16-byte alignment is the cmpxchg16b contract.
+        // 16-byte alignment is required by cmpxchg16b.
         constexpr inline std::size_t kStateAlignment = 16;
 
         struct alignas(kStateAlignment) state {
@@ -235,8 +213,7 @@ namespace ulid26 {
             return assemble_ulid(to_parts(value));
         }
 
-        // Adds offset to the 128-bit pair. Callers establish that the result
-        // stays inside one timestamp (the reservation bound).
+        // Precondition: the result stays inside one timestamp.
         [[nodiscard]]
         constexpr state offset_state(parts start, std::uint64_t offset) noexcept {
             std::uint64_t const next_lo = start.lo + offset;
@@ -244,8 +221,6 @@ namespace ulid26 {
             return state{.ts_hi = start.hi + carry, .lo = next_lo};
         }
 
-        // How many of count ids fit after start. start is the first id after
-        // the current state, so it is never beyond the entropy maximum.
         [[nodiscard]]
         constexpr std::uint64_t grant_from_start(parts start, std::uint64_t count) noexcept {
             if ((start.hi & kEntropyHighMask) != kEntropyHighMask) {
@@ -258,7 +233,6 @@ namespace ulid26 {
             return std::min(count, available);
         }
 
-        // Compile-time availability and runtime capability of 128-bit CAS.
         struct cas {
             [[nodiscard]]
             static constexpr bool available() noexcept;
@@ -269,8 +243,7 @@ namespace ulid26 {
             compare_exchange(state volatile* ptr, state& expected, state desired) noexcept;
         };
 
-#if defined(ULID26_FORCE_MUTEX)
-        // Compile-time escape hatch for ThreadSanitizer and mutex-tier validation.
+#ifdef ULID26_FORCE_MUTEX
         // Define ULID26_FORCE_MUTEX to omit the CAS tier entirely.
         constexpr bool cas::available() noexcept { return false; }
 
@@ -293,8 +266,7 @@ namespace ulid26 {
     defined(__GCC_ASM_FLAG_OUTPUTS__)
         constexpr bool cas::available() noexcept { return true; }
 
-        // 128-bit compare-and-swap via cmpxchg16b. Returns true on success; on
-        // failure updates expected with the observed state (like compare_exchange).
+        // On failure, expected receives the observed state.
         [[gnu::target("cx16")]]
         inline bool
         cas::compare_exchange(state volatile* ptr, state& expected, state desired) noexcept {
@@ -370,13 +342,11 @@ namespace ulid26 {
         }
 #endif
 
-        // Fans engine words into the 80 entropy bits, consuming exactly the
-        // engine's significant bits per draw, so a 31-bit engine never
-        // contributes a stuck-zero top bit.
+        // Consumes each engine's significant bits, keeping the top entropy bits live.
         template <entropy_engine R>
         void fill_entropy(R& source, parts& out) {
-            using word_t                       = std::invoke_result_t<R&>;
-            constexpr std::size_t kSignificant = static_cast<std::size_t>(
+            using word_t                = std::invoke_result_t<R&>;
+            constexpr auto kSignificant = static_cast<std::size_t>(
                 std::bit_width(static_cast<std::uint64_t>(R::max() - R::min()))
             );
             static_assert(kSignificant >= kBitsPerByte);
@@ -408,31 +378,34 @@ namespace ulid26 {
             return entropy;
         }
 
-        // A fresh reservation starts at a random entropy point with room for
-        // count ids. Since count <= 2^64 - 1, clamping the low half suffices:
-        // the carry out of lo can never be needed.
+        struct reservation_request {
+            std::uint64_t now;
+            std::uint64_t count;
+        };
+
+        // Clamping the low half suffices: count <= 2^64 - 1, so lo never carries.
         template <entropy_engine R>
         [[nodiscard]]
-        state fresh_reservation_start(R& engine, std::uint64_t now, std::uint64_t count) {
+        state fresh_reservation_start(R& engine, reservation_request request) {
             parts split{};
             fill_entropy(engine, split);
-            std::uint64_t const delta = count - 1;
+            std::uint64_t const delta = request.count - 1;
             std::uint64_t const limit = kMaxUint64 - delta;
             std::uint64_t const lo    = std::min(split.lo, limit);
-            return state{.ts_hi = (now << kTimestampShift) | split.hi, .lo = lo};
+            return state{.ts_hi = (request.now << kTimestampShift) | split.hi, .lo = lo};
         }
 
         template <entropy_engine R>
         [[nodiscard]]
-        state fresh_reservation_start(std::uint64_t now, std::uint64_t count) {
+        state fresh_reservation_start(reservation_request request) {
             thread_local R engine{};
-            return fresh_reservation_start(engine, now, count);
+            return fresh_reservation_start(engine, request);
         }
 
         template <entropy_engine R>
         struct shared_state {
             alignas(kStateAlignment) state data{};
-            mutable std::mutex mutex{};
+            mutable std::mutex mutex;
         };
 
         template <entropy_engine R>
@@ -443,9 +416,7 @@ namespace ulid26 {
         }
     } // namespace detail
 
-    // ChaCha20-based entropy engine (RFC 8439), one instance per thread. Seeded
-    // once from std::random_device; throws only if the OS provides no entropy
-    // at construction. The uint64_t overload is deterministic, for tests.
+    /// ChaCha20 entropy engine (RFC 8439). Construction may throw if the OS has no entropy.
     class default_rng {
       public:
         using result_type = std::uint64_t;
@@ -513,8 +484,7 @@ namespace ulid26 {
         std::size_t                                    position_ = 0;
     };
 
-    // OS entropy per draw. Holds no state (the std::random_device lives in
-    // thread-local storage), so it stays trivially copyable and movable.
+    /// OS entropy per draw.
     class system_rng {
       public:
         using result_type = std::uint32_t;
@@ -537,12 +507,8 @@ namespace ulid26 {
         struct reservation_access;
     }
 
-    // An immutable, copyable, random-access range of ulid values. A reservation
-    // fixes one millisecond timestamp and a contiguous entropy window; values
-    // are computed on demand, so iteration is pure and repeatable. Copying or
-    // iterating a reservation never mints new ids: call reserve() again for a
-    // new block.
-    class reservation : public std::ranges::view_interface<reservation> {
+    /// Immutable random-access range of ULIDs minted as one block.
+    class reservation : public std::ranges::view_base {
       public:
         class iterator {
           public:
@@ -583,8 +549,6 @@ namespace ulid26 {
             }
 
             constexpr iterator& operator+=(difference_type offset) noexcept {
-                // Unsigned conversion is modulo 2^64, so a negative offset
-                // subtracts without signed overflow.
                 index_ += static_cast<std::uint64_t>(offset);
                 return *this;
             }
@@ -691,11 +655,7 @@ namespace ulid26 {
         };
     } // namespace detail
 
-    // One-shot generation with a fresh timestamp and fresh entropy. Safe to call
-    // from any thread (entropy is thread-local). Throws only if the OS provides
-    // no entropy on first use in a thread; timestamps outside the 48-bit range
-    // saturate instead of failing. For more than one id, use a generator
-    // reservation rather than calling this in a loop.
+    /// Generates one ULID. Throws if the OS entropy source fails; timestamps saturate.
     template <entropy_engine R = default_rng>
     [[nodiscard]]
     ulid generate() {
@@ -712,9 +672,7 @@ namespace ulid26 {
         );
     }
 
-    // Monotonic generator with per-object state: zero synchronization. Copying
-    // is deleted (a copy would fork the sequence); moving transfers the sequence
-    // and re-seeds the moved-from engine.
+    /// Monotonic generator with per-object state; copies are deleted.
     template <entropy_engine R = default_rng>
     class unsynchronized_generator {
       public:
@@ -722,7 +680,7 @@ namespace ulid26 {
 
         explicit unsynchronized_generator(R engine) : rng_(std::move(engine)) {}
 
-        // Resume a sequence after a restart: continues strictly after previous.
+        /// Resumes the sequence after previous.
         explicit unsynchronized_generator(ulid previous) {
             auto const parts = detail::split_ulid(previous);
             ts_hi_           = parts.hi;
@@ -756,7 +714,6 @@ namespace ulid26 {
 
         ~unsynchronized_generator() = default;
 
-        // A single id. For more than one, reserve() rather than looping this.
         [[nodiscard]]
         std::expected<ulid, std::error_code> next() {
             auto block = reserve(1);
@@ -769,10 +726,8 @@ namespace ulid26 {
             return block->first();
         }
 
-        // Best-effort reservation: grants between 0 and count ids, all within
-        // one millisecond. Fails only for time_reversed (or an unrepresentable
-        // clock). A short or empty result is success: size() reports the grant.
-        // count is capped at INT64_MAX because reservation iterators use a signed difference type.
+        /// Grants up to count ULIDs in one millisecond; count is capped at INT64_MAX.
+        /// A short or empty block is success; time_reversed and overflow are errors.
         [[nodiscard]]
         std::expected<reservation, std::error_code> reserve(std::uint64_t count) {
             if (count == 0) {
@@ -792,7 +747,9 @@ namespace ulid26 {
             detail::parts first{};
             std::uint64_t granted = 0;
             if (decision->needs_fresh) {
-                first   = detail::to_parts(detail::fresh_reservation_start(rng_, now, count));
+                first = detail::to_parts(
+                    detail::fresh_reservation_start(rng_, {.now = now, .count = count})
+                );
                 granted = count;
             } else {
                 first   = decision->next;
@@ -811,14 +768,10 @@ namespace ulid26 {
         std::uint64_t lo_    = 0;
     };
 
-    // Monotonic generator over one global atomic state per engine type: every
-    // instance is a handle to the same sequence, so it is strictly increasing
-    // across ALL threads without passing a reference around. One commit per
-    // reservation; use reserve() rather than next() for bulk work.
+    /// Monotonic generator over one global sequence per engine type.
     template <entropy_engine R = default_rng>
     class shared_generator {
       public:
-        // A single id. For more than one, reserve() rather than looping this.
         [[nodiscard]]
         std::expected<ulid, std::error_code> next() {
             auto& shared = detail::global_shared_state<R>();
@@ -830,10 +783,8 @@ namespace ulid26 {
             return next_locked(shared);
         }
 
-        // Best-effort reservation: grants between 0 and count ids, all within
-        // one millisecond, disjoint from every other reservation. Fails only
-        // for time_reversed (or an unrepresentable clock).
-        // count is capped at INT64_MAX because reservation iterators use a signed difference type.
+        /// Grants up to count disjoint ULIDs in one millisecond; count is capped at INT64_MAX.
+        /// A short or empty block is success; time_reversed and overflow are errors.
         [[nodiscard]]
         std::expected<reservation, std::error_code> reserve(std::uint64_t count) {
             if (count == 0) {
@@ -867,7 +818,7 @@ namespace ulid26 {
 
                 detail::state const first =
                     decision->needs_fresh ?
-                        detail::fresh_reservation_start<R>(now, 1) :
+                        detail::fresh_reservation_start<R>({.now = now, .count = 1}) :
                         detail::state{.ts_hi = decision->next.hi, .lo = decision->next.lo};
                 if (detail::cas::compare_exchange(&shared.data, observed, first)) {
                     return detail::assemble_ulid(first);
@@ -887,7 +838,7 @@ namespace ulid26 {
 
             detail::state const first =
                 decision->needs_fresh ?
-                    detail::fresh_reservation_start<R>(now, 1) :
+                    detail::fresh_reservation_start<R>({.now = now, .count = 1}) :
                     detail::state{.ts_hi = decision->next.hi, .lo = decision->next.lo};
             shared.data = first;
             return detail::assemble_ulid(first);
@@ -915,7 +866,9 @@ namespace ulid26 {
                 detail::parts first{};
                 std::uint64_t granted = 0;
                 if (decision->needs_fresh) {
-                    first   = detail::to_parts(detail::fresh_reservation_start<R>(now, count));
+                    first = detail::to_parts(
+                        detail::fresh_reservation_start<R>({.now = now, .count = count})
+                    );
                     granted = count;
                 } else {
                     first   = decision->next;
@@ -946,7 +899,9 @@ namespace ulid26 {
             detail::parts first{};
             std::uint64_t granted = 0;
             if (decision->needs_fresh) {
-                first   = detail::to_parts(detail::fresh_reservation_start<R>(now, count));
+                first = detail::to_parts(
+                    detail::fresh_reservation_start<R>({.now = now, .count = count})
+                );
                 granted = count;
             } else {
                 first   = decision->next;

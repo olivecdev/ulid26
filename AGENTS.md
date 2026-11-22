@@ -30,8 +30,13 @@ C++23 |  header-only | zero deps | constexpr
 - Exception transparency: Never throw an exception, but do not catch any either.
 - Do not pessimize readability nor performance.
 - Prefer parameter structs when adjacent parameters have the same types or the function has more
-than 4 parameters.
-- Comments discipline: by default do not add any comments. Allowed exceptions only:
+  than 4 parameters.
+- Preprocessor macros only allowable for conditional compilation and include guards, never for
+  constants or inline code.
+- Comments discipline: by default do not add any comments. They most often encourage or justify
+  workarounds due bad desing. When urging to comment a chunk of code, challenge yourself for whether
+  a missing named function is latent there or whether your design is simply not good enough. The
+  only allowed exceptions are:
     1. SPDX/license and branding headers.
     2. Tool directives: header guards, `NOLINT*`, `clang-format off/on` - sparingly.
     3. Public API contract comments (`///`), concise, only for behavior users must know.
@@ -91,12 +96,15 @@ merge (pip gcovr), which need no Nix. Run from the repo root:
 
 | workflow | command | what it does |
 |---|---|---|
-| `ci` | `nix run .#ci` | clang-format gate, then Release configure, build, test, package |
+| `ci` | `nix run .#ci` | clang-format and clang-tidy gates, then Release configure, build, test, package |
 | `san` | `nix run .#san` | ASan/UBSan suite |
 | `tsan` | `nix run .#tsan` | TSan suite |
 | `cov` | `nix run .#cov` | gcov suite plus the Linux tracefile |
 | `fuzz` | `nix run .#fuzz` | libFuzzer harness plus the deterministic seed-corpus gate |
 | `bench` | `nix run .#bench` | Release benchmark matrix (ten repetitions, aggregates only; extra args forward to every suite; `ULID26_BENCH_CPU` pins CPUs, default 2, empty means unpinned) |
+
+The `ci` gate formats all sources, then runs clang-tidy over the test translation units (which
+include every library header); benchmark and fuzz sources stay out of clang-tidy.
 
 CI job count is a budget: merge steps into existing jobs when Nix setup overhead exceeds the work,
 but keep local and CI commands on the same flake apps.
