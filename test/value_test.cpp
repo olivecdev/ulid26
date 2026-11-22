@@ -676,6 +676,17 @@ int main() {
 #endif
     };
 
+    "to_string spells canonical text"_test = [] {
+        auto const example = ulid26::try_parse(kExample);
+        expect(example.has_value()) << "example parses";
+        if (!example.has_value()) {
+            return;
+        }
+        expect(example->to_string() == std::string{kExample}) << "narrow succeeds";
+        std::wstring const wide{kExample.begin(), kExample.end()};
+        expect(example->to_string<wchar_t>() == wide) << "wide succeeds";
+    };
+
     "format vectors"_test = [] {
         expect(std::format("{}", ulid26::min()) == std::string{kNil}) << "nil formats";
         constexpr std::wstring_view kWideNil = L"00000000000000000000000000";
@@ -688,6 +699,26 @@ int main() {
             expect(std::format("{}", example.value()) == std::string{kExample})
                 << "example formats";
         }
+    };
+
+    "formatter rejects malformed specifications"_test = [] {
+        auto const rejects = [](auto& formatter, auto& context) {
+            try {
+                static_cast<void>(formatter.parse(context));
+            } catch (std::format_error const&) { return true; }
+            return false;
+        };
+
+        std::formatter<ulid26::ulid, char>       narrow{};
+        std::formatter<ulid26::ulid, wchar_t>    wide{};
+        std::basic_format_parse_context<char>    empty_narrow{std::string_view{}};
+        std::basic_format_parse_context<wchar_t> empty_wide{std::wstring_view{}};
+        std::basic_format_parse_context<char>    bad_narrow{std::string_view{"x"}};
+        std::basic_format_parse_context<wchar_t> bad_wide{std::wstring_view{L"x"}};
+        expect(rejects(narrow, empty_narrow)) << "narrow empty range rejected";
+        expect(rejects(wide, empty_wide)) << "wide empty range rejected";
+        expect(rejects(narrow, bad_narrow)) << "narrow bad spec rejected";
+        expect(rejects(wide, bad_wide)) << "wide bad spec rejected";
     };
 
     "format_to sinks"_test = [] {
@@ -952,6 +983,9 @@ int main() {
         }
         known(ulid26::make_error_code(ulid26::errc::time_reversed));
         known(ulid26::make_error_code(ulid26::errc::generation_overflow));
+        expect(std::string_view{ulid26::ulid_category().name()} == "ulid") << "category name";
+        expect(ulid26::ulid_category().message(-1) == "ulid: unknown error")
+            << "unknown condition fallback";
     };
 
     "to_bytes vectors"_test = [] {

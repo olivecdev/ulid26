@@ -307,9 +307,34 @@ int main() {
         if (block) {
             expect(block->empty()) << "zero-sized block";
             expect(block->begin() == block->end()) << "empty range has no distance";
+            expect(block->last() == ulid26::min()) << "empty block has a nil last";
         }
         auto const after = generator.next();
         expect(after.has_value()) << "zero reservation leaves the state untouched";
+
+        ulid26::shared_generator<> shared;
+        auto const                 shared_block = shared.reserve(0);
+        expect(shared_block.has_value()) << "shared zero is not an error";
+        if (shared_block) {
+            expect(shared_block->empty()) << "shared zero-sized block";
+        }
+    };
+
+    "state machine overflow and carry"_test = [] {
+        using ulid26::detail::decide_advance;
+        std::uint64_t volatile at_modulus = ulid26::detail::kTimestampModulus;
+        auto const overflow               = decide_advance({}, at_modulus);
+        expect(!overflow.has_value()) << "unrepresentable clock fails";
+        if (!overflow) {
+            expect(overflow.error() == ulid26::errc::overflow) << "overflow";
+        }
+
+        std::uint64_t volatile zero = 0;
+        auto const carry            = decide_advance({.hi = 0, .lo = kEntropyMax}, zero);
+        expect(carry.has_value() && !carry->needs_fresh) << "exhausted low half carries";
+        if (carry) {
+            expect(carry->next.hi == 1 && carry->next.lo == 0) << "carry increments the high half";
+        }
     };
 
     "clock regression fails closed"_test = [] {
@@ -374,6 +399,32 @@ int main() {
         if (first && second && !first->empty() && !second->empty()) {
             expect(first->last() < second->first()) << "separate handles advance one sequence";
         }
+    };
+
+    "shared clock regression fails closed"_test = [] {
+        auto const future = ulid26::try_parse("7ZZZZZZZZZ0000000000000000");
+        expect(future.has_value()) << "future vector parses";
+        if (!future) {
+            return;
+        }
+        auto const parts  = ulid26::detail::split_ulid(*future);
+        auto&      shared = ulid26::detail::global_shared_state<ulid26::default_rng>();
+        shared.data       = ulid26::detail::state{.ts_hi = parts.hi, .lo = parts.lo};
+
+        ulid26::shared_generator<> generator;
+        auto const                 single = generator.next();
+        expect(!single.has_value()) << "shared single-value generation fails";
+        if (!single) {
+            expect(single.error() == ulid26::make_error_code(ulid26::errc::time_reversed))
+                << "shared time_reversed";
+        }
+        auto const block = generator.reserve(4);
+        expect(!block.has_value()) << "shared reservation fails too";
+        if (!block) {
+            expect(block.error() == ulid26::make_error_code(ulid26::errc::time_reversed))
+                << "shared same error";
+        }
+        shared.data = {};
     };
 
     "shared next shares one sequence"_test = [] {

@@ -77,7 +77,7 @@
             # Debug + gcov suite, then the Linux tracefile for the merge.
             set -euo pipefail
             cmake --workflow --preset cov
-            gcovr --root . --object-directory build/cov --filter 'ulid26/.*' --json -o coverage-linux.json
+            gcovr --root . --object-directory build/cov --filter 'ulid26/.*' --merge-lines --json -o coverage-linux.json
           '';
 
           fuzz = ''

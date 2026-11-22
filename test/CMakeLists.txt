@@ -67,3 +67,10 @@ add_executable(ulid26_generate_test generate_test.cpp)
 target_link_libraries(ulid26_generate_test PRIVATE ulid26_warnings ulid26 Boost::ut)
 add_test(NAME ulid26_generate_test COMMAND ulid26_generate_test)
 
+if(NOT ULID26_FORCE_MUTEX)
+    add_executable(ulid26_generate_mutex_test generate_test.cpp)
+    target_link_libraries(ulid26_generate_mutex_test PRIVATE ulid26_warnings ulid26 Boost::ut)
+    target_compile_definitions(ulid26_generate_mutex_test PRIVATE ULID26_FORCE_MUTEX=1)
+    add_test(NAME ulid26_generate_mutex_test COMMAND ulid26_generate_mutex_test)
+endif()
+
