@@ -83,7 +83,7 @@
             # appear at different lines; merge those function records.
             set -euo pipefail
             cmake --workflow --preset cov
-            gcovr --root . --object-directory build/cov --filter 'ulid26/.*' --merge-lines --merge-mode-functions=merge-use-line-min --json -o coverage-linux.json
+            gcovr --root . --object-directory build/cov --filter 'ulid26/.*' --merge-lines --merge-mode-functions=merge-use-line-min --gcov-ignore-parse-errors negative_hits.warn_once_per_file --json -o coverage-linux.json
           '';
 
           fuzz = ''

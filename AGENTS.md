@@ -113,8 +113,10 @@ but keep local and CI commands on the same flake apps.
 `nix develop` drops into the interactive shell carrying the same toolchain.
 
 The test suite needs boost-ext/ut: `nix develop` provides it (nixpkgs `ut`); Debian trixie+ ships
-`libboost-ext-ut-dev`, Conan has `boost-ext-ut/2.3.1`. Otherwise the build downloads the pinned
-v2.3.1 header automatically (network required). Packager builds must work offline: the dependency
+`libboost-ext-ut-dev`, Conan has `boost-ext-ut/2.3.1`. Otherwise the build tries three mirrors for
+the pinned v2.3.1 header (network required) and skips the tests with a warning if all are
+unreachable; `-DULID26_REQUIRE_UT=ON` (set by Windows CI) turns that skip into a configure error.
+Packager builds must work offline: the dependency
 is optional and externally supplyable, and the FetchContent fallback must not become mandatory.
 
 Benchmarks run Release builds only, with deterministic inputs, a pinned CPU, the `performance`

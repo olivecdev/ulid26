@@ -25,6 +25,7 @@ option(ULID26_BUILD_EXAMPLES "Build ulid26 examples" ${PROJECT_IS_TOP_LEVEL})
 option(ULID26_BUILD_BENCHMARKS "Build ulid26 benchmarks" OFF)
 option(ULID26_BUILD_FUZZ "Build ulid26 fuzz harness (Clang + libFuzzer only)" OFF)
 option(ULID26_FORCE_MUTEX "Compile only the mutex tier (for ThreadSanitizer)" OFF)
+option(ULID26_REQUIRE_UT "Fail configure if boost-ext/ut cannot be found or fetched" OFF)
 
 # ---- Library ----
 # Single target, all headers: this is a small header-only library, so one target installs everything
