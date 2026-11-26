@@ -283,727 +283,661 @@ namespace {
 
 } // namespace
 
-namespace {
-    using namespace boost::ut;
-
-    void test_known_vectors() {
-        expect(ulid26::is_valid(kExample)) << "example is valid";
-        expect(ulid26::is_valid(kMax)) << "max is valid";
-        expect(ulid26::is_valid(kNil)) << "nil is valid";
-        expect(ulid26::is_valid("01arz3ndektsv4rrffq69g5fav")) << "lowercase is valid";
-    }
-
-    void test_character_widths() {
-        expect(ulid26::is_valid(std::wstring_view{L"01ARZ3NDEKTSV4RRFFQ69G5FAV"}))
-            << "is_valid<wchar_t> accepts";
-        expect(!ulid26::is_valid(std::wstring_view{L"01ARZ3NDEKTSV4RRFFQ69G5FA\u00E9"}))
-            << "is_valid<wchar_t> rejects non-ASCII";
-        std::wstring invalid_neg{L"01ARZ3NDEKTSV4RRFFQ69G5FAV"};
-        invalid_neg[0] = static_cast<wchar_t>(-208);
-        std::wstring_view const inv{invalid_neg};
-        expect(!ulid26::is_valid(inv)) << "is_valid<wchar_t> rejects negative values";
-        expect(ulid26::is_valid(std::u8string_view{u8"01ARZ3NDEKTSV4RRFFQ69G5FAV"}))
-            << "is_valid<char8_t> accepts";
-        expect(!ulid26::is_valid(std::u8string_view{u8"01ARZ3NDEKTSV4RRFFQ69G5FA*"}))
-            << "is_valid<char8_t> rejects non-alphabet";
-        expect(ulid26::is_valid(std::u16string_view{u"01ARZ3NDEKTSV4RRFFQ69G5FAV"}))
-            << "is_valid<char16_t> accepts";
-        expect(!ulid26::is_valid(std::u16string_view{u"01ARZ3NDEKTSV4RRFFQ69G5FA!"}))
-            << "is_valid<char16_t> rejects non-alphabet";
-        expect(!ulid26::is_valid(std::u16string_view{u"01ARZ3NDEKTSV4RRFFQ69G5FA\u00E9"}))
-            << "is_valid<char16_t> rejects non-ASCII";
-        expect(ulid26::is_valid(std::u32string_view{U"01ARZ3NDEKTSV4RRFFQ69G5FAV"}))
-            << "is_valid<char32_t> accepts";
-        expect(!ulid26::is_valid(std::u32string_view{U"01ARZ3NDEKTSV4RRFFQ69G5FA*"}))
-            << "is_valid<char32_t> rejects non-alphabet";
-    }
-
-    void test_malformed_positions() {
-        constexpr std::array<char, 13> kBad = {
-            '*',
-            'I',
-            'i',
-            'L',
-            'l',
-            'O',
-            'o',
-            'U',
-            'u',
-            '\x7F',
-            '\x10',
-            static_cast<char>(0x80),
-            static_cast<char>(0xFF),
-        };
-        bool all_rejected = true;
-        for (std::size_t pos = 0; pos < 26; ++pos) {
-            for (char const bad : kBad) {
-                auto single    = to_array<26>(kExample);
-                single.at(pos) = bad;
-                all_rejected   = all_rejected &&
-                                 !ulid26::is_valid(std::string_view{single.data(), single.size()});
-            }
-        }
-        expect(all_rejected) << "every position rejects every bad byte";
-    }
-
-    void test_first_character_cap() {
-        constexpr std::array<char, 6> kOver  = {'8', '9', 'A', 'B', 'G', 'Z'};
-        bool                          capped = true;
-        for (char const first : kOver) {
-            auto single  = to_array<26>(kExample);
-            single.at(0) = first;
-            capped = capped && !ulid26::is_valid(std::string_view{single.data(), single.size()});
-        }
-        capped = capped && ulid26::is_valid(kMax);
-        expect(capped) << "first-char cap enforced";
-    }
-
-    void test_lengths() {
-        expect(!ulid26::is_valid("")) << "empty text is invalid";
-        expect(!ulid26::is_valid("01ARZ3NDEKTSV4RRFFQ69G5FA")) << "25 chars are invalid";
-        expect(!ulid26::is_valid("01ARZ3NDEKTSV4RRFFQ69G5FAVA")) << "27 chars are invalid";
-        expect(!ulid26::is_valid(std::wstring_view{L"01ARZ3NDEKTSV4RRFFQ69G5FAVV"}))
-            << "27 wide chars are invalid";
-    }
-
-    void test_try_parse_values() {
-        auto const example = ulid26::try_parse(kExample);
-        auto const max     = ulid26::try_parse(kMax);
-        auto const nil     = ulid26::try_parse(kNil);
-        bool const parsed  = example.has_value() && max.has_value() && nil.has_value();
-        expect(parsed) << "vectors parse";
-        if (parsed) {
-            expect(example.value().timestamp() == kExampleTimestamp) << "example timestamp";
-            expect(max.value().timestamp() == kMaxTimestamp) << "max timestamp";
-            expect(max.value() == ulid26::max()) << "max parses to ulid::max";
-            expect(nil.value().timestamp() == 0) << "nil timestamp";
-            expect(nil.value() == ulid26::min()) << "nil parses to ulid::min";
-            expect(nil.value() < example.value()) << "nil sorts first";
-            expect(example.value() < max.value()) << "example sorts before max";
-            expect(ulid26::min() < ulid26::max()) << "min sorts before max";
-        }
-        auto const lowered = ulid26::try_parse("01arz3ndektsv4rrffq69g5fav");
-        if (parsed && lowered.has_value()) {
-            expect(lowered.value() == example.value()) << "lowercase parses equal";
-        }
-        expect(parsed && lowered.has_value()) << "lowercase parses";
-    }
-
-    void test_try_parse_errors() {
-        auto const overflow = ulid26::try_parse("80000000000000000000000000");
-        expect(!overflow.has_value() && overflow.error() == ulid26::errc::overflow)
-            << "overflow reports";
-        auto const bad_char = ulid26::try_parse("01ARZ3NDEKTSV4RRFFQ69G5FA*");
-        expect(!bad_char.has_value() && bad_char.error() == ulid26::errc::invalid_character)
-            << "invalid character reports";
-        auto const both_bad = ulid26::try_parse("81ARZ3NDEKTSV4RRFFQ69G5FA*");
-        expect(!both_bad.has_value() && both_bad.error() == ulid26::errc::invalid_character)
-            << "invalid character outranks overflow";
-        auto const bad_length = ulid26::try_parse("too short");
-        expect(!bad_length.has_value() && bad_length.error() == ulid26::errc::invalid_length)
-            << "short length reports";
-        constexpr std::array<char, 13> kBad = {
-            '*',
-            'I',
-            'i',
-            'L',
-            'l',
-            'O',
-            'o',
-            'U',
-            'u',
-            '\x7F',
-            '\x10',
-            static_cast<char>(0x80),
-            static_cast<char>(0xFF),
-        };
-        bool precise = true;
-        for (std::size_t pos = 0; pos < 26; ++pos) {
-            for (char const bad : kBad) {
-                auto single    = to_array<26>(kExample);
-                single.at(pos) = bad;
-                auto const result =
-                    ulid26::try_parse(std::string_view{single.data(), single.size()});
-                precise = precise && !result.has_value() &&
-                          result.error() == ulid26::errc::invalid_character;
-            }
-        }
-        expect(precise) << "every position reports invalid_character";
-        constexpr std::array<char, 6> kOver  = {'8', '9', 'A', 'B', 'G', 'Z'};
-        bool                          capped = true;
-        for (char const first : kOver) {
-            auto single       = to_array<26>(kExample);
-            single.at(0)      = first;
-            auto const result = ulid26::try_parse(std::string_view{single.data(), single.size()});
-            capped = capped && !result.has_value() && result.error() == ulid26::errc::overflow;
-        }
-        auto const max = ulid26::try_parse(kMax);
-        capped         = capped && max.has_value() && max.value() == ulid26::max();
-        expect(capped) << "first-char cap reports overflow";
-    }
-
-    void test_try_parse_wide() {
-        auto const from_wide = ulid26::try_parse(std::wstring_view{L"01ARZ3NDEKTSV4RRFFQ69G5FAV"});
-        auto const from_u8  = ulid26::try_parse(std::u8string_view{u8"01ARZ3NDEKTSV4RRFFQ69G5FAV"});
-        auto const from_u16 = ulid26::try_parse(std::u16string_view{u"01ARZ3NDEKTSV4RRFFQ69G5FAV"});
-        auto const from_u32 = ulid26::try_parse(std::u32string_view{U"01ARZ3NDEKTSV4RRFFQ69G5FAV"});
-        bool const accepted = from_wide.has_value() && from_u8.has_value() &&
-                              from_u16.has_value() && from_u32.has_value();
-        expect(accepted) << "wide texts parse";
-        if (accepted) {
-            expect(from_wide.value().timestamp() == kExampleTimestamp) << "wchar_t timestamp";
-            expect(from_u8.value().timestamp() == kExampleTimestamp) << "char8_t timestamp";
-            expect(from_u16.value().timestamp() == kExampleTimestamp) << "char16_t timestamp";
-            expect(from_u32.value().timestamp() == kExampleTimestamp) << "char32_t timestamp";
-        }
-        auto const short_wide = ulid26::try_parse(std::wstring_view{L"short"});
-        expect(!short_wide.has_value() && short_wide.error() == ulid26::errc::invalid_length)
-            << "wchar_t rejects short input";
-        auto const bad_wide =
-            ulid26::try_parse(std::wstring_view{L"01ARZ3NDEKTSV4RRFFQ69G5FA\u00E9"});
-        expect(!bad_wide.has_value() && bad_wide.error() == ulid26::errc::invalid_character)
-            << "wchar_t rejects non-ASCII";
-        auto const long_wide = ulid26::try_parse(std::wstring_view{L"01ARZ3NDEKTSV4RRFFQ69G5FAVV"});
-        auto const long_u8 = ulid26::try_parse(std::u8string_view{u8"01ARZ3NDEKTSV4RRFFQ69G5FAVV"});
-        auto const long_u16 =
-            ulid26::try_parse(std::u16string_view{u"01ARZ3NDEKTSV4RRFFQ69G5FAVV"});
-        auto const long_u32 =
-            ulid26::try_parse(std::u32string_view{U"01ARZ3NDEKTSV4RRFFQ69G5FAVV"});
-        expect(!long_wide.has_value() && long_wide.error() == ulid26::errc::invalid_length)
-            << "wchar_t rejects overlong input";
-        expect(!long_u8.has_value() && long_u8.error() == ulid26::errc::invalid_length)
-            << "char8_t rejects overlong input";
-        expect(!long_u16.has_value() && long_u16.error() == ulid26::errc::invalid_length)
-            << "char16_t rejects overlong input";
-        expect(!long_u32.has_value() && long_u32.error() == ulid26::errc::invalid_length)
-            << "char32_t rejects overlong input";
-    }
-
-    void test_parse_agrees_with_is_valid() {
-        constexpr std::string_view kAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-        constexpr std::size_t      kCases    = 2048;
-        deterministic_rng          rng{0x9E3779B97F4A7C15ULL};
-        bool                       agreed = true;
-        for (std::size_t trial = 0; trial < kCases && agreed; ++trial) {
-            bool const alphabet_biased = (static_cast<unsigned>(rng.next_byte()) & 1U) == 0U;
-            std::array<char, 26> soup{};
-            for (char& slot : soup) {
-                std::uint8_t const byte = rng.next_byte();
-                if (alphabet_biased) {
-                    slot = kAlphabet.at(static_cast<std::size_t>(byte) & 31U);
-                } else {
-                    slot = static_cast<char>(byte);
-                }
-            }
-            std::string_view const view{soup.data(), soup.size()};
-            auto const             parsed = ulid26::try_parse(view);
-            agreed = agreed && (ulid26::is_valid(view) == parsed.has_value());
-        }
-        expect(agreed) << "is_valid agrees with try_parse on 2048 soups";
-    }
-
-    void test_to_chars_vectors() {
-        std::array<char, 26> out{};
-        ulid26::min().to_chars(std::span<char, 26>{out});
-        expect(std::string_view{out.data(), out.size()} == kNil) << "nil spells zeros";
-        ulid26::max().to_chars(std::span<char, 26>{out});
-        expect(std::string_view{out.data(), out.size()} == kMax) << "max spells cap";
-        auto const example = ulid26::try_parse(kExample);
-        expect(example.has_value()) << "example parses";
-        if (example.has_value()) {
-            example.value().to_chars(std::span<char, 26>{out});
-            expect(std::string_view{out.data(), out.size()} == kExample) << "example round-spells";
-            expect(example.value().to_string() == std::string{kExample})
-                << "to_string owns the spelling";
-        }
-        auto const lowered = ulid26::try_parse("01arz3ndektsv4rrffq69g5fav");
-        expect(lowered.has_value()) << "lowercase parses";
-        if (lowered.has_value()) {
-            lowered.value().to_chars(std::span<char, 26>{out});
-            expect(std::string_view{out.data(), out.size()} == kExample)
-                << "encode normalizes to uppercase";
-        }
-    }
-
-    void test_to_chars_widths() {
-        auto const example = ulid26::try_parse(kExample);
-        expect(example.has_value()) << "example parses";
-        if (!example.has_value()) {
-            return;
-        }
-        bool                     same = true;
-        std::array<char16_t, 26> wide16{};
-        example.value().to_chars(std::span<char16_t, 26>{wide16});
-        std::array<char32_t, 26> wide32{};
-        example.value().to_chars(std::span<char32_t, 26>{wide32});
-        std::array<wchar_t, 26> wide{};
-        example.value().to_chars(std::span<wchar_t, 26>{wide});
-        std::array<char8_t, 26> narrow8{};
-        example.value().to_chars(std::span<char8_t, 26>{narrow8});
-        for (std::size_t index = 0; index < 26; ++index) {
-            auto const unit = static_cast<char32_t>(kExample[index]);
-            same = same && wide16.at(index) == static_cast<char16_t>(unit) &&
-                   wide32.at(index) == unit && wide.at(index) == static_cast<wchar_t>(unit) &&
-                   narrow8.at(index) == static_cast<char8_t>(unit);
-        }
-        expect(same) << "every width spells the same code units";
-    }
-
-    void test_to_chars_round_trip() {
-        constexpr std::string_view kAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-        constexpr std::size_t      kCases    = 2048;
-        deterministic_rng          rng{0x0123456789ABCDEFULL};
-        bool                       held  = true;
-        std::size_t                valid = 0;
-        for (std::size_t trial = 0; trial < kCases && held; ++trial) {
-            std::array<char, 26> soup{};
-            for (char& slot : soup) {
-                slot = kAlphabet.at(static_cast<std::size_t>(rng.next_byte()) & 31U);
-            }
-            std::string_view const view{soup.data(), soup.size()};
-            auto const             parsed = ulid26::try_parse(view);
-            if (parsed.has_value()) {
-                ++valid;
-                auto const text = spell(parsed.value());
-                held            = held && std::string_view{text.data(), text.size()} == view;
-            }
-        }
-        expect(valid > 0) << "soup covered valid ids";
-        expect(held) << "decode inverts encode on canonical soup";
-    }
-
-    void test_to_string_exception_safety() {
-#if !(defined(_MSC_VER) && defined(_DEBUG))
-        auto const example = ulid26::try_parse(kExample);
-        expect(example.has_value()) << "example parses";
-        if (!example.has_value()) {
-            return;
-        }
-        ulid26::ulid const id             = example.value();
-        bool               threw_expected = false;
-        bool               threw_other    = false;
-        try {
-            static_cast<void>(
-                id.to_string<char, throwing_allocator<char>>(throwing_allocator<char>{})
-            );
-        } catch (std::bad_alloc const&) { threw_expected = true; } catch (...) {
-            threw_other = true;
-        }
-        expect(threw_expected) << "allocation failure propagates";
-        expect(!threw_other) << "no other exception escapes";
-#endif
-    }
-
-    void test_to_string_spells_canonical_text() {
-        auto const example = ulid26::try_parse(kExample);
-        expect(example.has_value()) << "example parses";
-        if (!example.has_value()) {
-            return;
-        }
-        expect(example->to_string() == std::string{kExample}) << "narrow succeeds";
-        std::wstring const wide{kExample.begin(), kExample.end()};
-        expect(example->to_string<wchar_t>() == wide) << "wide succeeds";
-    }
-
-    void test_format_vectors() {
-        expect(std::format("{}", ulid26::min()) == std::string{kNil}) << "nil formats";
-        constexpr std::wstring_view kWideNil = L"00000000000000000000000000";
-        expect(std::format(L"{}", ulid26::min()) == kWideNil)
-            << "nil formats to wide strings as well";
-        expect(std::format("{}", ulid26::max()) == std::string{kMax}) << "max formats";
-        auto const example = ulid26::try_parse(kExample);
-        expect(example.has_value()) << "example parses";
-        if (example.has_value()) {
-            expect(std::format("{}", example.value()) == std::string{kExample})
-                << "example formats";
-        }
-    }
-
-    void test_formatter_rejects_malformed_specifications() {
-        auto const rejects = [](auto& formatter, auto& context) {
-            try {
-                static_cast<void>(formatter.parse(context));
-            } catch (std::format_error const&) { return true; }
-            return false;
-        };
-
-        std::formatter<ulid26::ulid, char>       narrow{};
-        std::formatter<ulid26::ulid, wchar_t>    wide{};
-        std::basic_format_parse_context<char>    empty_narrow{std::string_view{}};
-        std::basic_format_parse_context<wchar_t> empty_wide{std::wstring_view{}};
-        std::basic_format_parse_context<char>    bad_narrow{std::string_view{"x"}};
-        std::basic_format_parse_context<wchar_t> bad_wide{std::wstring_view{L"x"}};
-        expect(rejects(narrow, empty_narrow)) << "narrow empty range rejected";
-        expect(rejects(wide, empty_wide)) << "wide empty range rejected";
-        expect(rejects(narrow, bad_narrow)) << "narrow bad spec rejected";
-        expect(rejects(wide, bad_wide)) << "wide bad spec rejected";
-    }
-
-    void test_format_to_sinks() {
-        auto const example = ulid26::try_parse(kExample);
-        expect(example.has_value()) << "example parses";
-        if (!example.has_value()) {
-            return;
-        }
-        std::string grown;
-        std::format_to(std::back_inserter(grown), "{}", example.value());
-        expect(grown == std::string{kExample}) << "back_insert sink grows";
-        std::array<char, 26> fixed{};
-        auto const end = std::format_to_n(fixed.data(), fixed.size(), "{}", example.value());
-        expect(end.size == 26) << "format_to_n reports full size";
-        expect(std::string_view{fixed.data(), fixed.size()} == kExample) << "fixed sink fills";
-    }
-
-    void test_stream_output_vectors() {
-        auto const example = ulid26::try_parse(kExample);
-        expect(example.has_value()) << "example parses";
-        if (!example.has_value()) {
-            return;
-        }
-        std::ostringstream spelled;
-        spelled << example.value();
-        expect(spelled.str() == std::string{kExample}) << "example streams";
-        std::ostringstream nil;
-        nil << ulid26::min();
-        expect(nil.str() == std::string{kNil}) << "nil streams";
-        std::ostringstream maxed;
-        maxed << ulid26::max();
-        expect(maxed.str() == std::string{kMax}) << "max streams";
-    }
-
-    void test_stream_output_widths() {
-        auto const example = ulid26::try_parse(kExample);
-        expect(example.has_value()) << "example parses";
-        if (!example.has_value()) {
-            return;
-        }
-        std::wostringstream wide;
-        wide << example.value();
-        std::wstring const expected{kExample.begin(), kExample.end()};
-        expect(wide.str() == expected) << "wchar_t stream spells";
-    }
-
-    void test_stream_output_chaining() {
-        std::ostringstream chained;
-        chained << ulid26::min() << ulid26::max();
-        expect(chained.str() == std::string{kNil} + std::string{kMax}) << "insertions chain";
-    }
-
-    void test_stream_output_prefailed() {
-        auto const example = ulid26::try_parse(kExample);
-        expect(example.has_value()) << "example parses";
-        if (!example.has_value()) {
-            return;
-        }
-        std::ostringstream broken;
-        broken.setstate(std::ios_base::badbit);
-        broken << example.value();
-        expect(!broken) << "failed stream stays failed";
-        expect(broken.str().empty()) << "failed stream gains nothing";
-    }
-
-    void test_stream_output_failure() {
-        auto const example = ulid26::try_parse(kExample);
-        expect(example.has_value()) << "example parses";
-        if (!example.has_value()) {
-            return;
-        }
-        failing_streambuf buf{};
-        std::ostream      failing{&buf};
-        failing << example.value();
-        expect(failing.bad()) << "write failure sets badbit";
-    }
-
-    void test_stream_input_round_trip() {
-        auto const example = ulid26::try_parse(kExample);
-        expect(example.has_value()) << "example parses";
-        if (!example.has_value()) {
-            return;
-        }
-        std::istringstream in{std::string{kExample}};
-        ulid26::ulid       id{};
-        in >> id;
-        expect(static_cast<bool>(in)) << "exact read stays good";
-        expect(id == example.value()) << "input parses to example";
-        std::istringstream nil{std::string{kNil}};
-        ulid26::ulid       nil_id{};
-        nil >> nil_id;
-        expect(nil_id == ulid26::min()) << "nil reads";
-        std::istringstream maxed{std::string{kMax}};
-        ulid26::ulid       max_id{};
-        maxed >> max_id;
-        expect(max_id == ulid26::max()) << "max reads";
-    }
-
-    void test_stream_input_short() {
-        std::istringstream in{"short"};
-        ulid26::ulid       id = ulid26::max();
-        in >> id;
-        expect(!in) << "short input fails";
-        expect(id == ulid26::max()) << "failed input leaves value untouched";
-        std::istringstream empty{""};
-        ulid26::ulid       empty_id = ulid26::max();
-        empty >> empty_id;
-        expect(!empty) << "empty input fails";
-        expect(empty_id == ulid26::max()) << "empty input leaves value untouched";
-    }
-
-    void test_stream_input_long() {
-        auto const example = ulid26::try_parse(kExample);
-        expect(example.has_value()) << "example parses";
-        if (!example.has_value()) {
-            return;
-        }
-        std::istringstream in{std::string{kExample} + "XYZ"};
-        ulid26::ulid       id{};
-        in >> id;
-        expect(static_cast<bool>(in)) << "overlong input stays good";
-        expect(id == example.value()) << "overlong input parses the prefix";
-        std::string rest{};
-        std::getline(in, rest);
-        expect(rest == "XYZ") << "remainder stays in the stream";
-    }
-
-    void test_stream_input_bad_character() {
-        std::string bad{kExample};
-        bad.back() = '*';
-        std::istringstream in{bad};
-        ulid26::ulid       id = ulid26::max();
-        in >> id;
-        expect(!in) << "bad character fails";
-        expect(id == ulid26::max()) << "bad character leaves value untouched";
-    }
-
-    void test_stream_input_whitespace() {
-        auto const example = ulid26::try_parse(kExample);
-        expect(example.has_value()) << "example parses";
-        if (!example.has_value()) {
-            return;
-        }
-        std::istringstream in{"   " + std::string{kExample}};
-        ulid26::ulid       id{};
-        in >> id;
-        expect(static_cast<bool>(in)) << "whitespace-prefixed input stays good";
-        expect(id == example.value()) << "whitespace is skipped";
-    }
-
-    void test_stream_input_widths() {
-        auto const example = ulid26::try_parse(kExample);
-        expect(example.has_value()) << "example parses";
-        if (!example.has_value()) {
-            return;
-        }
-        std::wistringstream in{L"01ARZ3NDEKTSV4RRFFQ69G5FAV"};
-        ulid26::ulid        id{};
-        in >> id;
-        expect(static_cast<bool>(in)) << "wide input stays good";
-        expect(id == example.value()) << "wide input parses";
-        std::wistringstream bad{L"01ARZ3NDEKTSV4RRFFQ69G5FA\u00E9"};
-        ulid26::ulid        bad_id = ulid26::max();
-        bad >> bad_id;
-        expect(!bad) << "non-ASCII wide input fails";
-        expect(bad_id == ulid26::max()) << "non-ASCII wide input leaves value untouched";
-    }
-
-    void test_hash_value() {
-        auto const example = ulid26::try_parse(kExample);
-        auto const lowered = ulid26::try_parse("01arz3ndektsv4rrffq69g5fav");
-        expect(example.has_value() && lowered.has_value()) << "hash vectors parse";
-        if (example.has_value() && lowered.has_value()) {
-            expect(
-                std::hash<ulid26::ulid>{}(lowered.value()) ==
-                std::hash<ulid26::ulid>{}(example.value())
-            ) << "equal ids hash equal";
-        }
-        std::unordered_set<ulid26::ulid> seen;
-        seen.insert(ulid26::min());
-        seen.insert(ulid26::max());
-        if (example.has_value()) {
-            seen.insert(example.value());
-            expect(seen.contains(example.value())) << "unordered lookup finds ids";
-        }
-    }
-
-    void test_from_string() {
-        auto const example = ulid26::ulid::from_string(std::string{kExample});
-        expect(example.has_value()) << "owning string parses";
-        if (example.has_value()) {
-            expect(example.value().timestamp() == kExampleTimestamp) << "known timestamp";
-        }
-        auto const overflow = ulid26::ulid::from_string("80000000000000000000000000");
-        expect(
-            !overflow.has_value() &&
-            overflow.error() == ulid26::make_error_code(ulid26::errc::overflow)
-        ) << "overflow maps to error_code";
-        auto const bad_char = ulid26::ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FA*");
-        expect(
-            !bad_char.has_value() &&
-            bad_char.error() == ulid26::make_error_code(ulid26::errc::invalid_character)
-        ) << "invalid character maps to error_code";
-        auto const bad_length = ulid26::ulid::from_string("short");
-        expect(
-            !bad_length.has_value() &&
-            bad_length.error() == ulid26::make_error_code(ulid26::errc::invalid_length)
-        ) << "short length maps to error_code";
-        std::error_code const converted = ulid26::errc::invalid_character;
-        expect(converted.category() == ulid26::ulid_category()) << "category pinned";
-        expect(converted == ulid26::make_error_code(ulid26::errc::invalid_character))
-            << "implicit conversion agrees";
-    }
-
-    void test_from_string_errors() {
-        auto const known = [](std::error_code code) {
-            expect(code.category() == ulid26::ulid_category()) << "ulid category";
-            expect(code.message() != "ulid: unknown error") << "known message";
-        };
-        auto const bad_length = ulid26::ulid::from_string("short");
-        expect(
-            !bad_length.has_value() &&
-            bad_length.error() == ulid26::make_error_code(ulid26::errc::invalid_length)
-        ) << "short length maps to error_code";
-        if (!bad_length.has_value()) {
-            known(bad_length.error());
-        }
-        auto const bad_char = ulid26::ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FA*");
-        expect(
-            !bad_char.has_value() &&
-            bad_char.error() == ulid26::make_error_code(ulid26::errc::invalid_character)
-        ) << "invalid character maps to error_code";
-        if (!bad_char.has_value()) {
-            known(bad_char.error());
-        }
-        auto const overflow = ulid26::ulid::from_string("80000000000000000000000000");
-        expect(
-            !overflow.has_value() &&
-            overflow.error() == ulid26::make_error_code(ulid26::errc::overflow)
-        ) << "overflow maps to error_code";
-        if (!overflow.has_value()) {
-            known(overflow.error());
-        }
-        known(ulid26::make_error_code(ulid26::errc::time_reversed));
-        known(ulid26::make_error_code(ulid26::errc::generation_overflow));
-        expect(std::string_view{ulid26::ulid_category().name()} == "ulid") << "category name";
-        expect(ulid26::ulid_category().message(-1) == "ulid: unknown error")
-            << "unknown condition fallback";
-    }
-
-    void test_to_bytes_vectors() {
-        expect(encode_bytes(ulid26::min()) == filled(0x00)) << "nil spells zeros";
-        expect(encode_bytes(ulid26::max()) == filled(0xFF)) << "max spells ones";
-        expect(encode_bytes(*ulid26::try_parse(kExample)) == kExampleBytes)
-            << "example spells big-endian";
-    }
-
-    void test_to_bytes_widths() {
-        auto const example = ulid26::try_parse(kExample);
-        expect(example.has_value()) << "example parses";
-        if (!example.has_value()) {
-            return;
-        }
-        bool const same = spells_bytes<char>(example.value(), kExampleBytes) &&
-                          spells_bytes<signed char>(example.value(), kExampleBytes) &&
-                          spells_bytes<unsigned char>(example.value(), kExampleBytes) &&
-                          spells_bytes<std::int8_t>(example.value(), kExampleBytes) &&
-                          spells_bytes<std::uint8_t>(example.value(), kExampleBytes) &&
-                          spells_bytes<std::byte>(example.value(), kExampleBytes);
-        expect(same) << "every byte type spells the same bits";
-    }
-
-    void test_from_bytes_vectors() {
-        expect(
-            ulid26::ulid::from_bytes(
-                std::span<std::uint8_t const, ulid26::ulid::kBinarySize>{filled(0x00)}
-            ) == ulid26::min()
-        ) << "zeros parse to nil";
-        expect(
-            ulid26::ulid::from_bytes(
-                std::span<std::uint8_t const, ulid26::ulid::kBinarySize>{filled(0xFF)}
-            ) == ulid26::max()
-        ) << "ones parse to max";
-        expect(
-            ulid26::ulid::from_bytes(
-                std::span<std::uint8_t const, ulid26::ulid::kBinarySize>{kExampleBytes}
-            ) == *ulid26::try_parse(kExample)
-        ) << "example bytes parse to example";
-    }
-
-    void test_bytes_round_trip() {
-        constexpr std::size_t kCases = 2048;
-        deterministic_rng     rng{0xFEEDFACECAFEBEEFULL};
-        expect(bytes_hold<std::uint8_t>(rng, kCases)) << "uint8_t soup round-trips";
-        expect(bytes_hold<std::int8_t>(rng, kCases)) << "int8_t soup round-trips";
-        expect(bytes_hold<std::byte>(rng, kCases)) << "std::byte soup round-trips";
-    }
-
-    void test_byte_order_matches_value_order() {
-        constexpr std::string_view kAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-        constexpr std::size_t      kCases    = 512;
-        deterministic_rng          rng{0x0BADF00DDEADBEEFULL};
-        std::vector<ulid26::ulid>  ids{};
-        for (std::size_t trial = 0; trial < kCases; ++trial) {
-            std::array<char, 26> soup{};
-            for (char& slot : soup) {
-                slot = kAlphabet.at(static_cast<std::size_t>(rng.next_byte()) & 31U);
-            }
-            std::string_view const view{soup.data(), soup.size()};
-            auto const             parsed = ulid26::try_parse(view);
-            if (parsed.has_value()) {
-                ids.push_back(parsed.value());
-                ids.push_back(parsed.value());
-            }
-        }
-        bool ordered = ids.size() > 2;
-        for (std::size_t pos = 0; pos + 1 < ids.size() && ordered; ++pos) {
-            ordered = ordered && ((encode_bytes(ids.at(pos)) <=> encode_bytes(ids.at(pos + 1))) ==
-                                  (ids.at(pos) <=> ids.at(pos + 1)));
-        }
-        expect(ordered) << "byte order agrees with value order";
-    }
-
-    void run_tests() {
-        "known vectors"_test                   = test_known_vectors;
-        "character widths"_test                = test_character_widths;
-        "malformed positions"_test             = test_malformed_positions;
-        "first character cap"_test             = test_first_character_cap;
-        "lengths"_test                         = test_lengths;
-        "try_parse values"_test                = test_try_parse_values;
-        "try_parse errors"_test                = test_try_parse_errors;
-        "try_parse wide"_test                  = test_try_parse_wide;
-        "parse agrees with is_valid"_test      = test_parse_agrees_with_is_valid;
-        "to_chars vectors"_test                = test_to_chars_vectors;
-        "to_chars widths"_test                 = test_to_chars_widths;
-        "to_chars round-trip"_test             = test_to_chars_round_trip;
-        "to_string exception safety"_test      = test_to_string_exception_safety;
-        "to_string spells canonical text"_test = test_to_string_spells_canonical_text;
-        "format vectors"_test                  = test_format_vectors;
-        "formatter rejects malformed specifications"_test =
-            test_formatter_rejects_malformed_specifications;
-        "format_to sinks"_test                = test_format_to_sinks;
-        "stream output vectors"_test          = test_stream_output_vectors;
-        "stream output widths"_test           = test_stream_output_widths;
-        "stream output chaining"_test         = test_stream_output_chaining;
-        "stream output prefailed"_test        = test_stream_output_prefailed;
-        "stream output failure"_test          = test_stream_output_failure;
-        "stream input round-trip"_test        = test_stream_input_round_trip;
-        "stream input short"_test             = test_stream_input_short;
-        "stream input long"_test              = test_stream_input_long;
-        "stream input bad character"_test     = test_stream_input_bad_character;
-        "stream input whitespace"_test        = test_stream_input_whitespace;
-        "stream input widths"_test            = test_stream_input_widths;
-        "hash_value"_test                     = test_hash_value;
-        "from_string"_test                    = test_from_string;
-        "from_string errors"_test             = test_from_string_errors;
-        "to_bytes vectors"_test               = test_to_bytes_vectors;
-        "to_bytes widths"_test                = test_to_bytes_widths;
-        "from_bytes vectors"_test             = test_from_bytes_vectors;
-        "bytes round-trip"_test               = test_bytes_round_trip;
-        "byte order matches value order"_test = test_byte_order_matches_value_order;
-    }
-} // namespace
-
+// The cognitive complexity that matters is the complexity of each lambda, not the total complexity
+// of main().
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int main() {
     try {
-        run_tests();
+        using namespace boost::ut;
+        "known vectors"_test = [] {
+            expect(ulid26::is_valid(kExample)) << "example is valid";
+            expect(ulid26::is_valid(kMax)) << "max is valid";
+            expect(ulid26::is_valid(kNil)) << "nil is valid";
+            expect(ulid26::is_valid("01arz3ndektsv4rrffq69g5fav")) << "lowercase is valid";
+        };
+        "character widths"_test = [] {
+            expect(ulid26::is_valid(std::wstring_view{L"01ARZ3NDEKTSV4RRFFQ69G5FAV"}))
+                << "is_valid<wchar_t> accepts";
+            expect(!ulid26::is_valid(std::wstring_view{L"01ARZ3NDEKTSV4RRFFQ69G5FA\u00E9"}))
+                << "is_valid<wchar_t> rejects non-ASCII";
+            std::wstring invalid_neg{L"01ARZ3NDEKTSV4RRFFQ69G5FAV"};
+            invalid_neg[0] = static_cast<wchar_t>(-208);
+            std::wstring_view const inv{invalid_neg};
+            expect(!ulid26::is_valid(inv)) << "is_valid<wchar_t> rejects negative values";
+            expect(ulid26::is_valid(std::u8string_view{u8"01ARZ3NDEKTSV4RRFFQ69G5FAV"}))
+                << "is_valid<char8_t> accepts";
+            expect(!ulid26::is_valid(std::u8string_view{u8"01ARZ3NDEKTSV4RRFFQ69G5FA*"}))
+                << "is_valid<char8_t> rejects non-alphabet";
+            expect(ulid26::is_valid(std::u16string_view{u"01ARZ3NDEKTSV4RRFFQ69G5FAV"}))
+                << "is_valid<char16_t> accepts";
+            expect(!ulid26::is_valid(std::u16string_view{u"01ARZ3NDEKTSV4RRFFQ69G5FA!"}))
+                << "is_valid<char16_t> rejects non-alphabet";
+            expect(!ulid26::is_valid(std::u16string_view{u"01ARZ3NDEKTSV4RRFFQ69G5FA\u00E9"}))
+                << "is_valid<char16_t> rejects non-ASCII";
+            expect(ulid26::is_valid(std::u32string_view{U"01ARZ3NDEKTSV4RRFFQ69G5FAV"}))
+                << "is_valid<char32_t> accepts";
+            expect(!ulid26::is_valid(std::u32string_view{U"01ARZ3NDEKTSV4RRFFQ69G5FA*"}))
+                << "is_valid<char32_t> rejects non-alphabet";
+        };
+        "malformed positions"_test = [] {
+            constexpr std::array<char, 13> kBad = {
+                '*',
+                'I',
+                'i',
+                'L',
+                'l',
+                'O',
+                'o',
+                'U',
+                'u',
+                '\x7F',
+                '\x10',
+                static_cast<char>(0x80),
+                static_cast<char>(0xFF),
+            };
+            bool all_rejected = true;
+            for (std::size_t pos = 0; pos < 26; ++pos) {
+                for (char const bad : kBad) {
+                    auto single    = to_array<26>(kExample);
+                    single.at(pos) = bad;
+                    all_rejected =
+                        all_rejected &&
+                        !ulid26::is_valid(std::string_view{single.data(), single.size()});
+                }
+            }
+            expect(all_rejected) << "every position rejects every bad byte";
+        };
+        "first character cap"_test = [] {
+            constexpr std::array<char, 6> kOver  = {'8', '9', 'A', 'B', 'G', 'Z'};
+            bool                          capped = true;
+            for (char const first : kOver) {
+                auto single  = to_array<26>(kExample);
+                single.at(0) = first;
+                capped =
+                    capped && !ulid26::is_valid(std::string_view{single.data(), single.size()});
+            }
+            capped = capped && ulid26::is_valid(kMax);
+            expect(capped) << "first-char cap enforced";
+        };
+        "lengths"_test = [] {
+            expect(!ulid26::is_valid("")) << "empty text is invalid";
+            expect(!ulid26::is_valid("01ARZ3NDEKTSV4RRFFQ69G5FA")) << "25 chars are invalid";
+            expect(!ulid26::is_valid("01ARZ3NDEKTSV4RRFFQ69G5FAVA")) << "27 chars are invalid";
+            expect(!ulid26::is_valid(std::wstring_view{L"01ARZ3NDEKTSV4RRFFQ69G5FAVV"}))
+                << "27 wide chars are invalid";
+        };
+        "try_parse values"_test = [] {
+            auto const example = ulid26::try_parse(kExample);
+            auto const max     = ulid26::try_parse(kMax);
+            auto const nil     = ulid26::try_parse(kNil);
+            bool const parsed  = example.has_value() && max.has_value() && nil.has_value();
+            expect(parsed) << "vectors parse";
+            if (parsed) {
+                expect(example.value().timestamp() == kExampleTimestamp) << "example timestamp";
+                expect(max.value().timestamp() == kMaxTimestamp) << "max timestamp";
+                expect(max.value() == ulid26::max()) << "max parses to ulid::max";
+                expect(nil.value().timestamp() == 0) << "nil timestamp";
+                expect(nil.value() == ulid26::min()) << "nil parses to ulid::min";
+                expect(nil.value() < example.value()) << "nil sorts first";
+                expect(example.value() < max.value()) << "example sorts before max";
+                expect(ulid26::min() < ulid26::max()) << "min sorts before max";
+            }
+            auto const lowered = ulid26::try_parse("01arz3ndektsv4rrffq69g5fav");
+            if (parsed && lowered.has_value()) {
+                expect(lowered.value() == example.value()) << "lowercase parses equal";
+            }
+            expect(parsed && lowered.has_value()) << "lowercase parses";
+        };
+        "try_parse errors"_test = [] {
+            auto const overflow = ulid26::try_parse("80000000000000000000000000");
+            expect(!overflow.has_value() && overflow.error() == ulid26::errc::overflow)
+                << "overflow reports";
+            auto const bad_char = ulid26::try_parse("01ARZ3NDEKTSV4RRFFQ69G5FA*");
+            expect(!bad_char.has_value() && bad_char.error() == ulid26::errc::invalid_character)
+                << "invalid character reports";
+            auto const both_bad = ulid26::try_parse("81ARZ3NDEKTSV4RRFFQ69G5FA*");
+            expect(!both_bad.has_value() && both_bad.error() == ulid26::errc::invalid_character)
+                << "invalid character outranks overflow";
+            auto const bad_length = ulid26::try_parse("too short");
+            expect(!bad_length.has_value() && bad_length.error() == ulid26::errc::invalid_length)
+                << "short length reports";
+            constexpr std::array<char, 13> kBad = {
+                '*',
+                'I',
+                'i',
+                'L',
+                'l',
+                'O',
+                'o',
+                'U',
+                'u',
+                '\x7F',
+                '\x10',
+                static_cast<char>(0x80),
+                static_cast<char>(0xFF),
+            };
+            bool precise = true;
+            for (std::size_t pos = 0; pos < 26; ++pos) {
+                for (char const bad : kBad) {
+                    auto single    = to_array<26>(kExample);
+                    single.at(pos) = bad;
+                    auto const result =
+                        ulid26::try_parse(std::string_view{single.data(), single.size()});
+                    precise = precise && !result.has_value() &&
+                              result.error() == ulid26::errc::invalid_character;
+                }
+            }
+            expect(precise) << "every position reports invalid_character";
+            constexpr std::array<char, 6> kOver  = {'8', '9', 'A', 'B', 'G', 'Z'};
+            bool                          capped = true;
+            for (char const first : kOver) {
+                auto single  = to_array<26>(kExample);
+                single.at(0) = first;
+                auto const result =
+                    ulid26::try_parse(std::string_view{single.data(), single.size()});
+                capped = capped && !result.has_value() && result.error() == ulid26::errc::overflow;
+            }
+            auto const max = ulid26::try_parse(kMax);
+            capped         = capped && max.has_value() && max.value() == ulid26::max();
+            expect(capped) << "first-char cap reports overflow";
+        };
+        "try_parse wide"_test = [] {
+            auto const from_wide =
+                ulid26::try_parse(std::wstring_view{L"01ARZ3NDEKTSV4RRFFQ69G5FAV"});
+            auto const from_u8 =
+                ulid26::try_parse(std::u8string_view{u8"01ARZ3NDEKTSV4RRFFQ69G5FAV"});
+            auto const from_u16 =
+                ulid26::try_parse(std::u16string_view{u"01ARZ3NDEKTSV4RRFFQ69G5FAV"});
+            auto const from_u32 =
+                ulid26::try_parse(std::u32string_view{U"01ARZ3NDEKTSV4RRFFQ69G5FAV"});
+            bool const accepted = from_wide.has_value() && from_u8.has_value() &&
+                                  from_u16.has_value() && from_u32.has_value();
+            expect(accepted) << "wide texts parse";
+            if (accepted) {
+                expect(from_wide.value().timestamp() == kExampleTimestamp) << "wchar_t timestamp";
+                expect(from_u8.value().timestamp() == kExampleTimestamp) << "char8_t timestamp";
+                expect(from_u16.value().timestamp() == kExampleTimestamp) << "char16_t timestamp";
+                expect(from_u32.value().timestamp() == kExampleTimestamp) << "char32_t timestamp";
+            }
+            auto const short_wide = ulid26::try_parse(std::wstring_view{L"short"});
+            expect(!short_wide.has_value() && short_wide.error() == ulid26::errc::invalid_length)
+                << "wchar_t rejects short input";
+            auto const bad_wide =
+                ulid26::try_parse(std::wstring_view{L"01ARZ3NDEKTSV4RRFFQ69G5FA\u00E9"});
+            expect(!bad_wide.has_value() && bad_wide.error() == ulid26::errc::invalid_character)
+                << "wchar_t rejects non-ASCII";
+            auto const long_wide =
+                ulid26::try_parse(std::wstring_view{L"01ARZ3NDEKTSV4RRFFQ69G5FAVV"});
+            auto const long_u8 =
+                ulid26::try_parse(std::u8string_view{u8"01ARZ3NDEKTSV4RRFFQ69G5FAVV"});
+            auto const long_u16 =
+                ulid26::try_parse(std::u16string_view{u"01ARZ3NDEKTSV4RRFFQ69G5FAVV"});
+            auto const long_u32 =
+                ulid26::try_parse(std::u32string_view{U"01ARZ3NDEKTSV4RRFFQ69G5FAVV"});
+            expect(!long_wide.has_value() && long_wide.error() == ulid26::errc::invalid_length)
+                << "wchar_t rejects overlong input";
+            expect(!long_u8.has_value() && long_u8.error() == ulid26::errc::invalid_length)
+                << "char8_t rejects overlong input";
+            expect(!long_u16.has_value() && long_u16.error() == ulid26::errc::invalid_length)
+                << "char16_t rejects overlong input";
+            expect(!long_u32.has_value() && long_u32.error() == ulid26::errc::invalid_length)
+                << "char32_t rejects overlong input";
+        };
+        "parse agrees with is_valid"_test = [] {
+            constexpr std::string_view kAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+            constexpr std::size_t      kCases    = 2048;
+            deterministic_rng          rng{0x9E3779B97F4A7C15ULL};
+            bool                       agreed = true;
+            for (std::size_t trial = 0; trial < kCases && agreed; ++trial) {
+                bool const alphabet_biased = (static_cast<unsigned>(rng.next_byte()) & 1U) == 0U;
+                std::array<char, 26> soup{};
+                for (char& slot : soup) {
+                    std::uint8_t const byte = rng.next_byte();
+                    if (alphabet_biased) {
+                        slot = kAlphabet.at(static_cast<std::size_t>(byte) & 31U);
+                    } else {
+                        slot = static_cast<char>(byte);
+                    }
+                }
+                std::string_view const view{soup.data(), soup.size()};
+                auto const             parsed = ulid26::try_parse(view);
+                agreed = agreed && (ulid26::is_valid(view) == parsed.has_value());
+            }
+            expect(agreed) << "is_valid agrees with try_parse on 2048 soups";
+        };
+        "to_chars vectors"_test = [] {
+            std::array<char, 26> out{};
+            ulid26::min().to_chars(std::span<char, 26>{out});
+            expect(std::string_view{out.data(), out.size()} == kNil) << "nil spells zeros";
+            ulid26::max().to_chars(std::span<char, 26>{out});
+            expect(std::string_view{out.data(), out.size()} == kMax) << "max spells cap";
+            auto const example = ulid26::try_parse(kExample);
+            expect(example.has_value()) << "example parses";
+            if (example.has_value()) {
+                example.value().to_chars(std::span<char, 26>{out});
+                expect(std::string_view{out.data(), out.size()} == kExample)
+                    << "example round-spells";
+                expect(example.value().to_string() == std::string{kExample})
+                    << "to_string owns the spelling";
+            }
+            auto const lowered = ulid26::try_parse("01arz3ndektsv4rrffq69g5fav");
+            expect(lowered.has_value()) << "lowercase parses";
+            if (lowered.has_value()) {
+                lowered.value().to_chars(std::span<char, 26>{out});
+                expect(std::string_view{out.data(), out.size()} == kExample)
+                    << "encode normalizes to uppercase";
+            }
+        };
+        "to_chars widths"_test = [] {
+            auto const example = ulid26::try_parse(kExample);
+            expect(example.has_value()) << "example parses";
+            if (!example.has_value()) {
+                return;
+            }
+            bool                     same = true;
+            std::array<char16_t, 26> wide16{};
+            example.value().to_chars(std::span<char16_t, 26>{wide16});
+            std::array<char32_t, 26> wide32{};
+            example.value().to_chars(std::span<char32_t, 26>{wide32});
+            std::array<wchar_t, 26> wide{};
+            example.value().to_chars(std::span<wchar_t, 26>{wide});
+            std::array<char8_t, 26> narrow8{};
+            example.value().to_chars(std::span<char8_t, 26>{narrow8});
+            for (std::size_t index = 0; index < 26; ++index) {
+                auto const unit = static_cast<char32_t>(kExample[index]);
+                same = same && wide16.at(index) == static_cast<char16_t>(unit) &&
+                       wide32.at(index) == unit && wide.at(index) == static_cast<wchar_t>(unit) &&
+                       narrow8.at(index) == static_cast<char8_t>(unit);
+            }
+            expect(same) << "every width spells the same code units";
+        };
+        "to_chars round-trip"_test = [] {
+            constexpr std::string_view kAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+            constexpr std::size_t      kCases    = 2048;
+            deterministic_rng          rng{0x0123456789ABCDEFULL};
+            bool                       held  = true;
+            std::size_t                valid = 0;
+            for (std::size_t trial = 0; trial < kCases && held; ++trial) {
+                std::array<char, 26> soup{};
+                for (char& slot : soup) {
+                    slot = kAlphabet.at(static_cast<std::size_t>(rng.next_byte()) & 31U);
+                }
+                std::string_view const view{soup.data(), soup.size()};
+                auto const             parsed = ulid26::try_parse(view);
+                if (parsed.has_value()) {
+                    ++valid;
+                    auto const text = spell(parsed.value());
+                    held            = held && std::string_view{text.data(), text.size()} == view;
+                }
+            }
+            expect(valid > 0) << "soup covered valid ids";
+            expect(held) << "decode inverts encode on canonical soup";
+        };
+        "to_string exception safety"_test = [] {
+#if !(defined(_MSC_VER) && defined(_DEBUG))
+            auto const example = ulid26::try_parse(kExample);
+            expect(example.has_value()) << "example parses";
+            if (!example.has_value()) {
+                return;
+            }
+            ulid26::ulid const id             = example.value();
+            bool               threw_expected = false;
+            bool               threw_other    = false;
+            try {
+                static_cast<void>(
+                    id.to_string<char, throwing_allocator<char>>(throwing_allocator<char>{})
+                );
+            } catch (std::bad_alloc const&) { threw_expected = true; } catch (...) {
+                threw_other = true;
+            }
+            expect(threw_expected) << "allocation failure propagates";
+            expect(!threw_other) << "no other exception escapes";
+#endif
+        };
+        "to_string spells canonical text"_test = [] {
+            auto const example = ulid26::try_parse(kExample);
+            expect(example.has_value()) << "example parses";
+            if (!example.has_value()) {
+                return;
+            }
+            expect(example->to_string() == std::string{kExample}) << "narrow succeeds";
+            std::wstring const wide{kExample.begin(), kExample.end()};
+            expect(example->to_string<wchar_t>() == wide) << "wide succeeds";
+        };
+        "format vectors"_test = [] {
+            expect(std::format("{}", ulid26::min()) == std::string{kNil}) << "nil formats";
+            constexpr std::wstring_view kWideNil = L"00000000000000000000000000";
+            expect(std::format(L"{}", ulid26::min()) == kWideNil)
+                << "nil formats to wide strings as well";
+            expect(std::format("{}", ulid26::max()) == std::string{kMax}) << "max formats";
+            auto const example = ulid26::try_parse(kExample);
+            expect(example.has_value()) << "example parses";
+            if (example.has_value()) {
+                expect(std::format("{}", example.value()) == std::string{kExample})
+                    << "example formats";
+            }
+        };
+        "formatter rejects malformed specifications"_test = [] {
+            auto const rejects = [](auto& formatter, auto& context) {
+                try {
+                    static_cast<void>(formatter.parse(context));
+                } catch (std::format_error const&) { return true; }
+                return false;
+            };
+
+            std::formatter<ulid26::ulid, char>       narrow{};
+            std::formatter<ulid26::ulid, wchar_t>    wide{};
+            std::basic_format_parse_context<char>    empty_narrow{std::string_view{}};
+            std::basic_format_parse_context<wchar_t> empty_wide{std::wstring_view{}};
+            std::basic_format_parse_context<char>    bad_narrow{std::string_view{"x"}};
+            std::basic_format_parse_context<wchar_t> bad_wide{std::wstring_view{L"x"}};
+            expect(rejects(narrow, empty_narrow)) << "narrow empty range rejected";
+            expect(rejects(wide, empty_wide)) << "wide empty range rejected";
+            expect(rejects(narrow, bad_narrow)) << "narrow bad spec rejected";
+            expect(rejects(wide, bad_wide)) << "wide bad spec rejected";
+        };
+        "format_to sinks"_test = [] {
+            auto const example = ulid26::try_parse(kExample);
+            expect(example.has_value()) << "example parses";
+            if (!example.has_value()) {
+                return;
+            }
+            std::string grown;
+            std::format_to(std::back_inserter(grown), "{}", example.value());
+            expect(grown == std::string{kExample}) << "back_insert sink grows";
+            std::array<char, 26> fixed{};
+            auto const end = std::format_to_n(fixed.data(), fixed.size(), "{}", example.value());
+            expect(end.size == 26) << "format_to_n reports full size";
+            expect(std::string_view{fixed.data(), fixed.size()} == kExample) << "fixed sink fills";
+        };
+        "stream output vectors"_test = [] {
+            auto const example = ulid26::try_parse(kExample);
+            expect(example.has_value()) << "example parses";
+            if (!example.has_value()) {
+                return;
+            }
+            std::ostringstream spelled;
+            spelled << example.value();
+            expect(spelled.str() == std::string{kExample}) << "example streams";
+            std::ostringstream nil;
+            nil << ulid26::min();
+            expect(nil.str() == std::string{kNil}) << "nil streams";
+            std::ostringstream maxed;
+            maxed << ulid26::max();
+            expect(maxed.str() == std::string{kMax}) << "max streams";
+        };
+        "stream output widths"_test = [] {
+            auto const example = ulid26::try_parse(kExample);
+            expect(example.has_value()) << "example parses";
+            if (!example.has_value()) {
+                return;
+            }
+            std::wostringstream wide;
+            wide << example.value();
+            std::wstring const expected{kExample.begin(), kExample.end()};
+            expect(wide.str() == expected) << "wchar_t stream spells";
+        };
+        "stream output chaining"_test = [] {
+            std::ostringstream chained;
+            chained << ulid26::min() << ulid26::max();
+            expect(chained.str() == std::string{kNil} + std::string{kMax}) << "insertions chain";
+        };
+        "stream output prefailed"_test = [] {
+            auto const example = ulid26::try_parse(kExample);
+            expect(example.has_value()) << "example parses";
+            if (!example.has_value()) {
+                return;
+            }
+            std::ostringstream broken;
+            broken.setstate(std::ios_base::badbit);
+            broken << example.value();
+            expect(!broken) << "failed stream stays failed";
+            expect(broken.str().empty()) << "failed stream gains nothing";
+        };
+        "stream output failure"_test = [] {
+            auto const example = ulid26::try_parse(kExample);
+            expect(example.has_value()) << "example parses";
+            if (!example.has_value()) {
+                return;
+            }
+            failing_streambuf buf{};
+            std::ostream      failing{&buf};
+            failing << example.value();
+            expect(failing.bad()) << "write failure sets badbit";
+        };
+        "stream input round-trip"_test = [] {
+            auto const example = ulid26::try_parse(kExample);
+            expect(example.has_value()) << "example parses";
+            if (!example.has_value()) {
+                return;
+            }
+            std::istringstream in{std::string{kExample}};
+            ulid26::ulid       id{};
+            in >> id;
+            expect(static_cast<bool>(in)) << "exact read stays good";
+            expect(id == example.value()) << "input parses to example";
+            std::istringstream nil{std::string{kNil}};
+            ulid26::ulid       nil_id{};
+            nil >> nil_id;
+            expect(nil_id == ulid26::min()) << "nil reads";
+            std::istringstream maxed{std::string{kMax}};
+            ulid26::ulid       max_id{};
+            maxed >> max_id;
+            expect(max_id == ulid26::max()) << "max reads";
+        };
+        "stream input short"_test = [] {
+            std::istringstream in{"short"};
+            ulid26::ulid       id = ulid26::max();
+            in >> id;
+            expect(!in) << "short input fails";
+            expect(id == ulid26::max()) << "failed input leaves value untouched";
+            std::istringstream empty{""};
+            ulid26::ulid       empty_id = ulid26::max();
+            empty >> empty_id;
+            expect(!empty) << "empty input fails";
+            expect(empty_id == ulid26::max()) << "empty input leaves value untouched";
+        };
+        "stream input long"_test = [] {
+            auto const example = ulid26::try_parse(kExample);
+            expect(example.has_value()) << "example parses";
+            if (!example.has_value()) {
+                return;
+            }
+            std::istringstream in{std::string{kExample} + "XYZ"};
+            ulid26::ulid       id{};
+            in >> id;
+            expect(static_cast<bool>(in)) << "overlong input stays good";
+            expect(id == example.value()) << "overlong input parses the prefix";
+            std::string rest{};
+            std::getline(in, rest);
+            expect(rest == "XYZ") << "remainder stays in the stream";
+        };
+        "stream input bad character"_test = [] {
+            std::string bad{kExample};
+            bad.back() = '*';
+            std::istringstream in{bad};
+            ulid26::ulid       id = ulid26::max();
+            in >> id;
+            expect(!in) << "bad character fails";
+            expect(id == ulid26::max()) << "bad character leaves value untouched";
+        };
+        "stream input whitespace"_test = [] {
+            auto const example = ulid26::try_parse(kExample);
+            expect(example.has_value()) << "example parses";
+            if (!example.has_value()) {
+                return;
+            }
+            std::istringstream in{"   " + std::string{kExample}};
+            ulid26::ulid       id{};
+            in >> id;
+            expect(static_cast<bool>(in)) << "whitespace-prefixed input stays good";
+            expect(id == example.value()) << "whitespace is skipped";
+        };
+        "stream input widths"_test = [] {
+            auto const example = ulid26::try_parse(kExample);
+            expect(example.has_value()) << "example parses";
+            if (!example.has_value()) {
+                return;
+            }
+            std::wistringstream in{L"01ARZ3NDEKTSV4RRFFQ69G5FAV"};
+            ulid26::ulid        id{};
+            in >> id;
+            expect(static_cast<bool>(in)) << "wide input stays good";
+            expect(id == example.value()) << "wide input parses";
+            std::wistringstream bad{L"01ARZ3NDEKTSV4RRFFQ69G5FA\u00E9"};
+            ulid26::ulid        bad_id = ulid26::max();
+            bad >> bad_id;
+            expect(!bad) << "non-ASCII wide input fails";
+            expect(bad_id == ulid26::max()) << "non-ASCII wide input leaves value untouched";
+        };
+        "hash_value"_test = [] {
+            auto const example = ulid26::try_parse(kExample);
+            auto const lowered = ulid26::try_parse("01arz3ndektsv4rrffq69g5fav");
+            expect(example.has_value() && lowered.has_value()) << "hash vectors parse";
+            if (example.has_value() && lowered.has_value()) {
+                expect(
+                    std::hash<ulid26::ulid>{}(lowered.value()) ==
+                    std::hash<ulid26::ulid>{}(example.value())
+                ) << "equal ids hash equal";
+            }
+            std::unordered_set<ulid26::ulid> seen;
+            seen.insert(ulid26::min());
+            seen.insert(ulid26::max());
+            if (example.has_value()) {
+                seen.insert(example.value());
+                expect(seen.contains(example.value())) << "unordered lookup finds ids";
+            }
+        };
+        "from_string"_test = [] {
+            auto const example = ulid26::ulid::from_string(std::string{kExample});
+            expect(example.has_value()) << "owning string parses";
+            if (example.has_value()) {
+                expect(example.value().timestamp() == kExampleTimestamp) << "known timestamp";
+            }
+            auto const overflow = ulid26::ulid::from_string("80000000000000000000000000");
+            expect(
+                !overflow.has_value() &&
+                overflow.error() == ulid26::make_error_code(ulid26::errc::overflow)
+            ) << "overflow maps to error_code";
+            auto const bad_char = ulid26::ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FA*");
+            expect(
+                !bad_char.has_value() &&
+                bad_char.error() == ulid26::make_error_code(ulid26::errc::invalid_character)
+            ) << "invalid character maps to error_code";
+            auto const bad_length = ulid26::ulid::from_string("short");
+            expect(
+                !bad_length.has_value() &&
+                bad_length.error() == ulid26::make_error_code(ulid26::errc::invalid_length)
+            ) << "short length maps to error_code";
+            std::error_code const converted = ulid26::errc::invalid_character;
+            expect(converted.category() == ulid26::ulid_category()) << "category pinned";
+            expect(converted == ulid26::make_error_code(ulid26::errc::invalid_character))
+                << "implicit conversion agrees";
+        };
+        "from_string errors"_test = [] {
+            auto const known = [](std::error_code code) {
+                expect(code.category() == ulid26::ulid_category()) << "ulid category";
+                expect(code.message() != "ulid: unknown error") << "known message";
+            };
+            auto const bad_length = ulid26::ulid::from_string("short");
+            expect(
+                !bad_length.has_value() &&
+                bad_length.error() == ulid26::make_error_code(ulid26::errc::invalid_length)
+            ) << "short length maps to error_code";
+            if (!bad_length.has_value()) {
+                known(bad_length.error());
+            }
+            auto const bad_char = ulid26::ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FA*");
+            expect(
+                !bad_char.has_value() &&
+                bad_char.error() == ulid26::make_error_code(ulid26::errc::invalid_character)
+            ) << "invalid character maps to error_code";
+            if (!bad_char.has_value()) {
+                known(bad_char.error());
+            }
+            auto const overflow = ulid26::ulid::from_string("80000000000000000000000000");
+            expect(
+                !overflow.has_value() &&
+                overflow.error() == ulid26::make_error_code(ulid26::errc::overflow)
+            ) << "overflow maps to error_code";
+            if (!overflow.has_value()) {
+                known(overflow.error());
+            }
+            known(ulid26::make_error_code(ulid26::errc::time_reversed));
+            known(ulid26::make_error_code(ulid26::errc::generation_overflow));
+            expect(std::string_view{ulid26::ulid_category().name()} == "ulid") << "category name";
+            expect(ulid26::ulid_category().message(-1) == "ulid: unknown error")
+                << "unknown condition fallback";
+        };
+        "to_bytes vectors"_test = [] {
+            expect(encode_bytes(ulid26::min()) == filled(0x00)) << "nil spells zeros";
+            expect(encode_bytes(ulid26::max()) == filled(0xFF)) << "max spells ones";
+            expect(encode_bytes(*ulid26::try_parse(kExample)) == kExampleBytes)
+                << "example spells big-endian";
+        };
+        "to_bytes widths"_test = [] {
+            auto const example = ulid26::try_parse(kExample);
+            expect(example.has_value()) << "example parses";
+            if (!example.has_value()) {
+                return;
+            }
+            bool const same = spells_bytes<char>(example.value(), kExampleBytes) &&
+                              spells_bytes<signed char>(example.value(), kExampleBytes) &&
+                              spells_bytes<unsigned char>(example.value(), kExampleBytes) &&
+                              spells_bytes<std::int8_t>(example.value(), kExampleBytes) &&
+                              spells_bytes<std::uint8_t>(example.value(), kExampleBytes) &&
+                              spells_bytes<std::byte>(example.value(), kExampleBytes);
+            expect(same) << "every byte type spells the same bits";
+        };
+        "from_bytes vectors"_test = [] {
+            expect(
+                ulid26::ulid::from_bytes(
+                    std::span<std::uint8_t const, ulid26::ulid::kBinarySize>{filled(0x00)}
+                ) == ulid26::min()
+            ) << "zeros parse to nil";
+            expect(
+                ulid26::ulid::from_bytes(
+                    std::span<std::uint8_t const, ulid26::ulid::kBinarySize>{filled(0xFF)}
+                ) == ulid26::max()
+            ) << "ones parse to max";
+            expect(
+                ulid26::ulid::from_bytes(
+                    std::span<std::uint8_t const, ulid26::ulid::kBinarySize>{kExampleBytes}
+                ) == *ulid26::try_parse(kExample)
+            ) << "example bytes parse to example";
+        };
+        "bytes round-trip"_test = [] {
+            constexpr std::size_t kCases = 2048;
+            deterministic_rng     rng{0xFEEDFACECAFEBEEFULL};
+            expect(bytes_hold<std::uint8_t>(rng, kCases)) << "uint8_t soup round-trips";
+            expect(bytes_hold<std::int8_t>(rng, kCases)) << "int8_t soup round-trips";
+            expect(bytes_hold<std::byte>(rng, kCases)) << "std::byte soup round-trips";
+        };
+        "byte order matches value order"_test = [] {
+            constexpr std::string_view kAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+            constexpr std::size_t      kCases    = 512;
+            deterministic_rng          rng{0x0BADF00DDEADBEEFULL};
+            std::vector<ulid26::ulid>  ids{};
+            for (std::size_t trial = 0; trial < kCases; ++trial) {
+                std::array<char, 26> soup{};
+                for (char& slot : soup) {
+                    slot = kAlphabet.at(static_cast<std::size_t>(rng.next_byte()) & 31U);
+                }
+                std::string_view const view{soup.data(), soup.size()};
+                auto const             parsed = ulid26::try_parse(view);
+                if (parsed.has_value()) {
+                    ids.push_back(parsed.value());
+                    ids.push_back(parsed.value());
+                }
+            }
+            bool ordered = ids.size() > 2;
+            for (std::size_t pos = 0; pos + 1 < ids.size() && ordered; ++pos) {
+                ordered =
+                    ordered && ((encode_bytes(ids.at(pos)) <=> encode_bytes(ids.at(pos + 1))) ==
+                                (ids.at(pos) <=> ids.at(pos + 1)));
+            }
+            expect(ordered) << "byte order agrees with value order";
+        };
     } catch (...) { return 1; }
     return 0;
 }

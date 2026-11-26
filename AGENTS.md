@@ -25,6 +25,10 @@ C++23 |  header-only | zero deps | constexpr
 ## Rules
 
 - clang-format and clang-tidy are the gatekeepers: all code must pass them
+- clang-tidy is the guardian of the coding style, you'll only find rules about coding styles
+  here when they don't have a clang-tidy check for them.
+- every NOLINT* must be explained in code and be announced to the team in PR descriptions or inline
+  in the context
 - Readability means less indentation: early returns are a must and the happy path should use less
   indentation than the error path.
 - Exception transparency: Never throw an exception, but do not catch any either.
